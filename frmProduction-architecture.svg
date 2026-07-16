@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="760" viewBox="0 0 1120 760" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#37474f"/>
+    </marker>
+    <marker id="arrowP" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#7a4fb5"/>
+    </marker>
+    <marker id="arrowG" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#9e9e9e"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="760" fill="#ffffff"/>
+  <text x="60" y="30" font-size="19" font-weight="700" fill="#1a2733">frmProduction &#8212; Falcon AOI Production &amp; Tool-Management Architecture</text>
+  <text x="60" y="48" font-size="12" fill="#5a6b78">Falcon.Net AOI (AOI_Main) &#8594; COM wrappers &#8594; ToolManager / ProductionManager &#8594; EFEM &amp; inspection</text>
+
+  <!-- ================= BAND BACKGROUNDS ================= -->
+  <rect x="60" y="116" width="1040" height="94"  rx="8" fill="#e8f0fe"/>
+  <rect x="60" y="226" width="1040" height="100" rx="8" fill="#e6f4ea"/>
+  <rect x="60" y="342" width="1040" height="84"  rx="8" fill="#fef7e0"/>
+  <rect x="60" y="442" width="1040" height="146" rx="8" fill="#f3e8fd"/>
+  <rect x="60" y="604" width="1040" height="94"  rx="8" fill="#fdecef"/>
+
+  <!-- band labels (rotated) -->
+  <text x="26" y="163" font-size="11" font-weight="700" fill="#607d8b" text-anchor="middle" transform="rotate(-90,26,163)">FALCON GUI</text>
+  <text x="26" y="276" font-size="11" font-weight="700" fill="#2e8b57" text-anchor="middle" transform="rotate(-90,26,276)">COM WRAPPERS</text>
+  <text x="26" y="384" font-size="11" font-weight="700" fill="#b5822a" text-anchor="middle" transform="rotate(-90,26,384)">TOOL CLIENTS</text>
+  <text x="26" y="515" font-size="11" font-weight="700" fill="#6b4fbb" text-anchor="middle" transform="rotate(-90,26,515)">TOOL MANAGEMENT</text>
+  <text x="26" y="651" font-size="11" font-weight="700" fill="#b5546a" text-anchor="middle" transform="rotate(-90,26,651)">INSPECTION &amp; MOTION</text>
+
+  <!-- ================= ACTORS ================= -->
+  <rect x="90"  y="56" width="200" height="44" rx="6" fill="#eceff1" stroke="#607d8b" stroke-width="1.5"/>
+  <text x="190" y="83" font-size="14" fill="#263238" text-anchor="middle">Operator</text>
+  <rect x="810" y="56" width="240" height="44" rx="6" fill="#eceff1" stroke="#607d8b" stroke-width="1.5"/>
+  <text x="930" y="83" font-size="14" fill="#263238" text-anchor="middle">Factory Host (SECS/GEM)</text>
+
+  <!-- ================= GUI ================= -->
+  <rect x="110" y="136" width="300" height="54" rx="6" fill="#d2e3fc" stroke="#3b6fb0" stroke-width="1.5"/>
+  <text x="260" y="168" font-size="13" fill="#1a2733" text-anchor="middle">frmMain / frmJobTab / frmScanTab</text>
+  <rect x="620" y="136" width="340" height="54" rx="6" fill="#c6dafc" stroke="#1a56a0" stroke-width="2"/>
+  <text x="790" y="158" font-size="14" font-weight="700" fill="#12305c" text-anchor="middle">frmProduction</text>
+  <text x="790" y="176" font-size="11" fill="#33475e" text-anchor="middle">(invisible controller form)</text>
+
+  <!-- ================= WRAPPERS ================= -->
+  <rect x="90"  y="248" width="220" height="56" rx="6" fill="#d7efe0" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="200" y="280" font-size="12.5" fill="#183d2a" text-anchor="middle">ToolManagerUiWrapper</text>
+  <rect x="343" y="248" width="220" height="56" rx="6" fill="#d7efe0" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="453" y="280" font-size="12" fill="#183d2a" text-anchor="middle">ExternalControlCbUiWrapper</text>
+  <rect x="596" y="248" width="220" height="56" rx="6" fill="#d7efe0" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="706" y="280" font-size="12.5" fill="#183d2a" text-anchor="middle">AutoLoaderUIWrapper</text>
+  <rect x="849" y="248" width="220" height="56" rx="6" fill="#d7efe0" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="959" y="273" font-size="12.5" fill="#183d2a" text-anchor="middle">CFalconEvents</text>
+  <text x="959" y="290" font-size="11" fill="#33574a" text-anchor="middle">IFalconFireEvents</text>
+
+  <!-- ================= CLIENTS ================= -->
+  <rect x="110" y="358" width="220" height="52" rx="6" fill="#fde6b8" stroke="#c9862a" stroke-width="1.5"/>
+  <text x="220" y="388" font-size="12.5" fill="#5a3d0a" text-anchor="middle">ProductionGui.NET</text>
+  <rect x="470" y="358" width="300" height="52" rx="6" fill="#fde6b8" stroke="#c9862a" stroke-width="1.5"/>
+  <text x="620" y="388" font-size="12.5" fill="#5a3d0a" text-anchor="middle">NetTAC / TAC.Net / TopiClient</text>
+  <rect x="800" y="358" width="300" height="52" rx="6" fill="#fde6b8" stroke="#c9862a" stroke-width="1.5"/>
+  <text x="950" y="382" font-size="12.5" fill="#5a3d0a" text-anchor="middle">SecsGemGui.Net + SecsGemClient</text>
+  <text x="950" y="399" font-size="11" fill="#6b4f1a" text-anchor="middle">(C++ E30 / E87)</text>
+
+  <!-- ================= TOOL MANAGEMENT ================= -->
+  <rect x="110" y="462" width="360" height="80" rx="6" fill="#e7d6fb" stroke="#6b4fbb" stroke-width="2"/>
+  <text x="290" y="494" font-size="14" font-weight="700" fill="#3b2570" text-anchor="middle">ToolManager</text>
+  <text x="290" y="512" font-size="11" fill="#4a3580" text-anchor="middle">tool state machine + client launcher</text>
+  <text x="290" y="528" font-size="10.5" fill="#6b4fbb" text-anchor="middle">Engineering &#8596; EngToProduction &#8594; Production</text>
+  <rect x="640" y="462" width="380" height="80" rx="6" fill="#e7d6fb" stroke="#6b4fbb" stroke-width="2"/>
+  <text x="830" y="494" font-size="14" font-weight="700" fill="#3b2570" text-anchor="middle">ProductionManager</text>
+  <text x="830" y="512" font-size="11" fill="#4a3580" text-anchor="middle">per-carrier ICarrierExecuter state models</text>
+  <text x="830" y="528" font-size="10.5" fill="#6b4fbb" text-anchor="middle">dock &#8594; map &#8594; batch-setup &#8594; execute &#8594; unload</text>
+  <rect x="200" y="552" width="380" height="28" rx="14" fill="#d9c4f7" stroke="#6b4fbb" stroke-width="1.2"/>
+  <text x="390" y="571" font-size="11.5" fill="#3b2570" text-anchor="middle">ToolEvents &#8212; CallbackHandler event bus</text>
+
+  <!-- ================= ENGINE ================= -->
+  <rect x="110" y="624" width="300" height="54" rx="6" fill="#f8d0d9" stroke="#b5546a" stroke-width="1.5"/>
+  <text x="260" y="656" font-size="12.5" fill="#5c1f2e" text-anchor="middle">ScanManager / AutoCycleManager</text>
+  <rect x="470" y="624" width="330" height="54" rx="6" fill="#f8d0d9" stroke="#b5546a" stroke-width="1.5"/>
+  <text x="635" y="649" font-size="12" fill="#5c1f2e" text-anchor="middle">IAutomationManager /</text>
+  <text x="635" y="665" font-size="12" fill="#5c1f2e" text-anchor="middle">IAutomationBatchExecuter</text>
+  <rect x="840" y="624" width="260" height="54" rx="6" fill="#f8d0d9" stroke="#b5546a" stroke-width="1.5"/>
+  <text x="970" y="649" font-size="12" fill="#5c1f2e" text-anchor="middle">IEfemServices &#8594; EFEM /</text>
+  <text x="970" y="665" font-size="12" fill="#5c1f2e" text-anchor="middle">robot / load-ports</text>
+
+  <!-- ================= CONNECTORS ================= -->
+  <!-- Operator -> frmMain -->
+  <path d="M190,100 L235,134" fill="none" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="120" y="122" font-size="10.5" fill="#455a64">Start Production</text>
+  <!-- frmMain -> frmProduction -->
+  <path d="M410,163 L618,163" fill="none" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="514" y="156" font-size="10.5" fill="#455a64" text-anchor="middle">drives</text>
+
+  <!-- frmProduction owns/calls 4 wrappers -->
+  <path d="M760,190 L210,246" fill="none" stroke="#9e9e9e" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <path d="M775,190 L453,246" fill="none" stroke="#9e9e9e" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <path d="M800,190 L706,246" fill="none" stroke="#9e9e9e" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <path d="M820,190 L950,246" fill="none" stroke="#9e9e9e" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <text x="640" y="228" font-size="10" fill="#8a8a8a" text-anchor="middle">owns / calls</text>
+
+  <!-- TMW -> ToolManager (command down) elbow through client gap x=450 -->
+  <path d="M200,304 L200,340 L450,340 L450,460" fill="none" stroke="#37474f" stroke-width="1.7" marker-end="url(#arrow)"/>
+  <text x="300" y="334" font-size="10.5" fill="#37474f" text-anchor="middle">ChangeToolState</text>
+  <!-- ToolManager -> TMW (state events up) dashed channel x=470 -->
+  <path d="M470,462 L470,352 L215,352 L215,306" fill="none" stroke="#7a4fb5" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowP)"/>
+  <text x="330" y="366" font-size="10.5" fill="#7a4fb5" text-anchor="middle">OnToolStateChanged</text>
+
+  <!-- Host -> SecsGem client -->
+  <path d="M930,100 L948,356" fill="none" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="985" y="240" font-size="10.5" fill="#455a64" text-anchor="middle" transform="rotate(90,985,240)">SEMI E30/E87</text>
+
+  <!-- Clients -> ToolManager -->
+  <path d="M220,410 L205,460" fill="none" stroke="#37474f" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M600,410 L440,460" fill="none" stroke="#37474f" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M900,410 L458,460" fill="none" stroke="#37474f" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="640" y="432" font-size="10" fill="#455a64" text-anchor="middle">connect / remote commands</text>
+
+  <!-- ToolManager -> ProductionManager -->
+  <path d="M470,500 L638,500" fill="none" stroke="#37474f" stroke-width="1.7" marker-end="url(#arrow)"/>
+  <text x="554" y="492" font-size="10" fill="#37474f" text-anchor="middle">Enter/Start</text>
+  <text x="554" y="514" font-size="10" fill="#37474f" text-anchor="middle">Production</text>
+  <!-- ToolManager -> ToolEvents -->
+  <path d="M290,542 L340,552" fill="none" stroke="#7a4fb5" stroke-width="1.2"/>
+
+  <!-- ProductionManager -> engine -->
+  <path d="M760,542 L640,622" fill="none" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <path d="M900,542 L968,622" fill="none" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="820" y="588" font-size="10" fill="#455a64" text-anchor="middle">carrier / batch ops</text>
+
+  <!-- CFalconEvents -> ScanManager (Fire* events), routed right + bottom -->
+  <path d="M959,304 L1092,304 L1092,690 L260,690 L260,680" fill="none" stroke="#7a4fb5" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowP)"/>
+  <text x="600" y="686" font-size="10.5" fill="#7a4fb5" text-anchor="middle">Fire* events (scan / automation results into engine)</text>
+
+  <!-- ================= LEGEND ================= -->
+  <line x1="90" y1="724" x2="140" y2="724" stroke="#37474f" stroke-width="1.7" marker-end="url(#arrow)"/>
+  <text x="150" y="728" font-size="11" fill="#37474f">command / call / ownership (down)</text>
+  <line x1="440" y1="724" x2="490" y2="724" stroke="#7a4fb5" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowP)"/>
+  <text x="500" y="728" font-size="11" fill="#7a4fb5">events / callbacks (up)</text>
+  <text x="1090" y="728" font-size="10" fill="#90a4ae" text-anchor="end">Camtek Falcon &#183; frmProduction</text>
+</svg>

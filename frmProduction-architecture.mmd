@@ -1,0 +1,53 @@
+flowchart TB
+    Host["Factory Host (SECS/GEM)"]
+    Operator["Operator"]
+
+    subgraph GUI["Falcon.Net AOI GUI (AOI_Main)"]
+        frmMain["frmMain / frmJobTab / frmScanTab"]
+        frmProduction["frmProduction<br/>(invisible controller form)"]
+    end
+
+    subgraph Wrappers["COM Server Wrappers (GUI side)"]
+        TMW["ToolManagerUiWrapper"]
+        ECW["ExternalControlCbUiWrapper"]
+        ALW["AutoLoaderUIWrapper"]
+        FE["CFalconEvents / IFalconFireEvents"]
+    end
+
+    subgraph Clients["Tool Clients (one active, per Config.ini)"]
+        SECS["SecsGemGui.Net + SecsGemClient<br/>(C++ E30/E87)"]
+        PGUI["ProductionGui.NET"]
+        TAC["NetTAC / TAC.Net / TopiClient"]
+    end
+
+    subgraph TM["Tool Management (COM singleton)"]
+        ToolManager["ToolManager<br/>(tool state machine + client launcher)"]
+        ToolEvents["ToolEvents (CallbackHandler bus)"]
+        ProductionManager["ProductionManager<br/>(per-carrier ICarrierExecuter state models)"]
+    end
+
+    subgraph Engine["Inspection & Motion"]
+        Scan["ScanManager / AutoCycleManager"]
+        Auto["IAutomationManager / IAutomationBatchExecuter"]
+        EFEM["IEfemServices -> EFEM / robot / load-ports"]
+    end
+
+    Operator -->|Start Production| frmMain
+    frmMain --> frmProduction
+    frmProduction --- TMW & ECW & ALW & FE
+
+    TMW -->|ChangeToolState| ToolManager
+    ToolManager --> ToolEvents
+    ToolEvents -.->|OnToolStateChanged| TMW
+
+    Host --> SECS
+    SECS --> ToolManager
+    PGUI --> ToolManager
+    TAC --> ToolManager
+
+    ToolManager --> ProductionManager
+    ProductionManager --> Auto
+    ProductionManager --> EFEM
+    FE -.->|Fire* events| Scan
+    ECW -.->|remote control| frmProduction
+    ALW -.->|EFEM events| frmProduction
