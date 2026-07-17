@@ -4,8 +4,9 @@
 > Naming note: "A3" here is the **fused A1+A2 architecture** (F2 of the alternatives doc) — *not* the dropped "A3 control-plane extraction" alternative.
 > Supersedes running A1 and A2 side by side — the fusion **deletes the ToolLink channel** and two risk items with it.
 > **Hard constraint honored: AOI_Main stays .NET Framework 4.8** — it participates as a bus *client* only ("dials out, never listens").
-> **Revision 2:** incorporates all findings of the three-agent adversarial review ([a3-fused-design-review.md](a3-fused-design-review.md)) — corrected SECS/GEM stack, FalconWrapper.exe added, durability rewritten as a contract, P1 split for rollback, request/reply semantics defined.
-> Companion docs: [aoi-client-architecture-alternatives.md](aoi-client-architecture-alternatives.md), [camtek-toolhost-design.md](camtek-toolhost-design.md), [architecture-review-and-toolgateway-investigation.md](architecture-review-and-toolgateway-investigation.md).
+> **Revision 2:** incorporates all findings of the three-agent adversarial review ([a3-fused-design-review.md](../02-reviews/a3-fused-design-review.md)) — corrected SECS/GEM stack, FalconWrapper.exe added, durability rewritten as a contract, P1 split for rollback, request/reply semantics defined.
+> **⚠ Bus/durability mechanics superseded (2026-07-18):** the concurrency review ([camtek-fabric-concurrency-review.md](../02-reviews/camtek-fabric-concurrency-review.md)) revised the publish path and ack model — single journal-writer thread + group commit + **ack-tombstones** (no in-place journal deletion), gateway **WAL-spool-before-ack**, priority lanes, NACK redelivery schedule, retained class B. Authoritative: [camtek-messaging-bus-design.md](../01-proposal/camtek-messaging-bus-design.md) Rev. 3 + [camtek-tool-fabric-complete-design.md](../01-proposal/camtek-tool-fabric-complete-design.md). This doc's §4/§6 flows are kept as the historical Revision-2 record.
+> Companion docs: [aoi-client-architecture-alternatives.md](aoi-client-architecture-alternatives.md), [camtek-toolhost-design.md](../01-proposal/camtek-toolhost-design.md), [architecture-review-and-toolgateway-investigation.md](architecture-review-and-toolgateway-investigation.md).
 > Status: proposal (not approved). Date: 2026-07-16.
 
 ---

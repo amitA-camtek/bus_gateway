@@ -2,7 +2,7 @@
 
 > Detailed design for consolidating the per-tool Windows services into a single supervisor service.
 > Goal: **reduce the Windows-service count on a Falcon tool PC from 3 to 1** while *keeping* process/crash isolation.
-> Companion doc: [architecture-review-and-toolgateway-investigation.md](architecture-review-and-toolgateway-investigation.md) (§4 — inventory & option analysis).
+> Companion doc: [architecture-review-and-toolgateway-investigation.md](../04-history/architecture-review-and-toolgateway-investigation.md) (§4 — inventory & option analysis).
 > Status: proposal (not approved). Date: 2026-07-16.
 
 ---

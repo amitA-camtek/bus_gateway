@@ -3,7 +3,7 @@
 > How the AOI communicates with external systems, the role of `frmProduction`, and system diagrams.
 > Source: `c:\Amit\75049_3\camtek\frmProduction.md`
 >
-> **⚠ Corrections (2026-07-16, verified by adversarial code review — details in [a3-fused-design-review.md](a3-fused-design-review.md)):** the live SECS/GEM stack is C# `SecsGemObjects` (in the `SecsGemGui.Net` process) over the native Cimetrix `SECSGemDriver` — `SecsGemClient\E30RemoteControl.cpp:46` cited below is legacy (not in `Falcon_2022.sln`); host commands flow via `SecsGemObjects\Clients\RemoteControllers\RemoteControl.cs`. The COM event hub lives in `FalconWrapper.exe` (out-of-proc). The ToolGateway push hooks in frmScanTab are at ~:1888–1902 and :10162 (not :7301), and the "<5 ms fire-and-forget" claim does not hold when the gateway is down.
+> **⚠ Corrections (2026-07-16, verified by adversarial code review — details in [a3-fused-design-review.md](../02-reviews/a3-fused-design-review.md)):** the live SECS/GEM stack is C# `SecsGemObjects` (in the `SecsGemGui.Net` process) over the native Cimetrix `SECSGemDriver` — `SecsGemClient\E30RemoteControl.cpp:46` cited below is legacy (not in `Falcon_2022.sln`); host commands flow via `SecsGemObjects\Clients\RemoteControllers\RemoteControl.cs`. The COM event hub lives in `FalconWrapper.exe` (out-of-proc). The ToolGateway push hooks in frmScanTab are at ~:1888–1902 and :10162 (not :7301), and the "<5 ms fire-and-forget" claim does not hold when the gateway is down.
 
 ---
 

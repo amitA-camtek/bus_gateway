@@ -1,10 +1,11 @@
 # Camtek.Messaging — Bus Fabric Detailed Design
 
-> Implementation-level design for the `Camtek.Messaging` bus — the internal fabric of the fused A3 architecture ([a3-fused-bus-gateway-design.md](a3-fused-bus-gateway-design.md), §3–§4).
+> Implementation-level design for the `Camtek.Messaging` bus — the internal fabric of the fused A3 architecture ([a3-fused-bus-gateway-design.md](../04-history/a3-fused-bus-gateway-design.md), §3–§4).
 > This document zooms from the architecture level down to: library layout, API, wire protocol, broker internals, the class-A ack/journal protocol, threading, security, and the test kit.
 > **Status: proposed — nothing here exists in the repo today.** Prior art it supersedes: `CamtekSystem\PubSub` (MSMQ + `IPublisher`/`PublisherFactory`).
 > Constraints inherited: multi-target `net48;net8.0`; binary-drop delivery to `c:\bis\bin` + `c:\bis\bin\x64`; publish bound ≤1 ms; durability classes A/B/C/R-R; broker as ToolHost child; localhost-only with ACLs.
-> Date: 2026-07-16.
+> **Revision 3 (2026-07-18):** incorporates the concurrency/connectivity/load adversarial review ([camtek-fabric-concurrency-review.md](../02-reviews/camtek-fabric-concurrency-review.md)) — single-writer journal with group commit + ack-tombstones, reader/writer-split I/O with priority lanes, normative E2E-ack subscriber-set semantics, NACK redelivery schedule + `RESUME`, retained class B, seq-contiguity dedup, dequeue-boundary Ttl gates, storm control, load model, composite-fault TestKit.
+> Date: 2026-07-16 / rev. 2026-07-18.
 
 ---
 
@@ -26,9 +27,9 @@ Three deliverables: the **client library** (linked into every process), the **br
 flowchart TB
     subgraph PROC1["Any publisher process (net48 or net8)"]
         API1["Camtek.Messaging API\nIBus - Publish / Subscribe / Request"]
-        LQ1["Local send queue\n(lock-free append, the ≤1 ms bound)"]
-        JR1["Journal (class A only)\nJSON-lines on disk"]
-        PUMP1["Pump thread\nall I/O happens here"]
+        LQ1["Local send queue\n(lock-free enqueue - the ≤1 ms bound,\npriority lanes REQ/REPLY over A over B/C)"]
+        JR1["Journal-writer thread (single writer)\ngroup commit + ack-tombstones\nJSON-lines on disk"]
+        PUMP1["Pump (reader/writer split)\nall pipe I/O here"]
     end
 
     subgraph BROKER["Camtek.Messaging.Broker (ToolHost child)"]
@@ -47,16 +48,16 @@ flowchart TB
     TH["ToolHost :5100"]
 
     API1 --> LQ1
-    API1 -.->|class A| JR1
+    LQ1 -.->|"class A envelopes"| JR1
     LQ1 --> PUMP1
-    JR1 --> PUMP1
+    JR1 -->|"release seq after durable batch"| PUMP1
     PUMP1 -->|pipe frame| CONN
     CONN --> REG --> SUBQ
     SUBQ -->|pipe frame| DISP2
     DISP2 --> H2
     DISP2 -->|"ack (class A)"| CONN
     CONN -->|"end-to-end ack"| PUMP1
-    PUMP1 -->|delete entry| JR1
+    PUMP1 -->|"enqueue Acked(seq) - journal thread\nappends ack-tombstone (append-only)"| JR1
     MET --> TH
 ```
 
@@ -81,8 +82,9 @@ Packaging: post-build drop of the net48 binaries to `c:\bis\bin` **and** `c:\bis
 ```csharp
 public interface IBus : IDisposable
 {
-    // Fire-and-forget publish. Hard bound: returns in ≤1 ms (enqueue only, never I/O).
-    // Class A topics: the envelope is journaled to disk BEFORE this returns.
+    // Fire-and-forget publish. Hard bound: returns in ≤1 ms (lock-free enqueue only, never I/O).
+    // Class A topics: the envelope is handed to the single journal-writer thread;
+    // it is journaled (group commit) BEFORE the pump sends it to the broker (§6.1).
     void Publish<T>(Topic topic, T payload, PublishOptions options = null);
 
     // Subscribe with an async handler. Handler runs on a pool thread —
@@ -168,10 +170,19 @@ Transport: **named pipes** (`\\.\pipe\camtek.bus`), length-prefixed JSON frames.
 | `PUB_ACK` | broker → client | Broker accepted (enqueued to all matched subscriber queues) — sufficient for classes B/C |
 | `DELIVER` | broker → client | Envelope to a subscriber |
 | `DELIVER_ACK` | client → broker | Subscriber processed (class A) — forwarded to publisher as `E2E_ACK` |
-| `E2E_ACK` | broker → publisher | Class A end-to-end confirmation → journal entry deleted |
+| `E2E_ACK` | broker → publisher | Class A end-to-end confirmation (per subscriber-set) → journal thread appends the ack-tombstone |
 | `NACK` | broker → publisher | Class-A subscriber queue full / no subscriber → entry stays in journal |
-| `REQ` / `REPLY` | both | Request/reply with `requestId` + `ttlMs` |
-| `PING` / `PONG` | both | Application-level heartbeat (detects hung-but-alive broker) |
+| `REQ` / `REPLY` | both | Request/reply with `requestId` + `ttlMs`. Broker R-R queue-full → immediate `REPLY(rejected-busy)` — the requester learns fast instead of eating the whole Ttl |
+| `RESUME` | broker → publisher | Per-topic "subscriber queue drained below low-watermark" — publishers redeliver NACKed entries on this signal instead of blind-polling |
+| `PING` / `PONG` | both | Application-level heartbeat. **Priority-dequeued ahead of data** on every connection; the broker self-check reports **measured loop lag**, so ToolHost distinguishes *degraded* from *hung* and restarts only the latter |
+
+**Frame priority lanes (CC4):** every send queue (client and broker per-connection writers) drains in weighted priority order **`REQ`/`REPLY` > class A > B > C** — commands never serialize behind bulk backlog; weighting (not absolute priority) prevents total starvation of C.
+
+**I/O model (CC4):** reader and writer are **split** (overlapped I/O or two threads) on both client and broker — *a peer must always be able to drain reads regardless of write progress* (kills the duplex write-write deadlock). Per-frame write deadline; deadline exceeded → reconnect (client) / disconnect subscriber (broker).
+
+**`resumeFromSeq` semantics (CM5):** it is the **publisher** declaring its replay start per class-A topic; optionally the broker forwards subscriber trim hints to publishers to shorten replay. (The broker itself is stateless and never serves history.)
+
+**NACK redelivery (CC6):** a NACKed class-A entry stays in the journal and is redelivered by the publisher on **exponential backoff + jitter, in journal seq order, one bounded in-flight window per topic — independent of reconnect**; `RESUME` short-circuits the wait.
 
 Frame limit 1 MB (payloads are metadata + paths, never bulk image data — bulk stays on disk, the bus carries *pointers*).
 
@@ -179,39 +190,54 @@ Frame limit 1 MB (payloads are metadata + paths, never bulk image data — bulk 
 
 ## 6. Client Internals
 
-### 6.1 Publish path (the ≤1 ms bound)
+### 6.1 Publish path (the ≤1 ms bound — Revision 3, post-concurrency-review)
+
+> **Revision note (CC1/CC2):** the original design put the class-A journal append+flush on the caller thread and let the pump thread delete entries from the same file. Both were rejected by review: a `FlushFileBuffers` on a loaded tool disk spikes 10–100 ms (the exact caller-thread-I/O disease this design cures), and two threads mutating one JSON-lines file is a corruption/silent-loss mechanism. The fix below solves both with one structure.
 
 ```mermaid
 sequenceDiagram
     participant C as Caller thread (e.g. scan thread)
-    participant J as Journal file (class A)
-    participant Q as Local send queue
-    participant P as Pump thread
+    participant Q as Local send queue (lock-free MPSC)
+    participant JT as Journal-writer thread (single writer)
+    participant P as Pump (writer half)
     participant B as Broker
 
-    C->>J: append JSON line + flush (class A only)
     C->>Q: enqueue envelope
-    Note over C: returns here - ≤1 ms, no socket, no connect, no sleep
-    P->>B: PUB frame (pipe write)
-    B-->>P: PUB_ACK
-    Note over P: class B/C done. Class A waits for E2E_ACK
-    B-->>P: E2E_ACK (after subscriber DELIVER_ACK)
-    P->>J: delete journal entry
+    Note over C: returns here - ≤1 ms ALWAYS - no disk, no socket, no lock held across I/O
+    Q->>JT: class-A envelope
+    JT->>JT: append batch + ONE group-commit flush per batch / per N ms
+    JT->>P: release seq to pump (class A publishes only after its journal batch is durable)
+    P->>B: PUB frame
+    B-->>P: PUB_ACK (class B/C done)
+    B-->>P: E2E_ACK (per subscriber-set - see §7)
+    P->>JT: enqueue Acked(seq)
+    JT->>JT: append ack-tombstone (never mutates - append-only)
 ```
 
-- The caller thread touches **only** the journal append (measured; a local NTFS append+flush of a <4 KB line is well under 1 ms) and a lock-free queue. All pipe I/O, reconnect, backoff live on the pump thread.
-- **Disconnected/broker-down:** enqueue continues; class A accumulates in the journal (disk-bounded, alarmed via counters), B/C in the bounded memory queue (coalesce/drop per class). On reconnect, `HELLO(resumeFromSeq)` + journal replay; `messageId` dedup on the subscriber side absorbs overlaps.
-- Journal format = the proven `FailedMessagesHandler` JSON-lines pattern, one file per class-A topic: `C:\Camtek\Bus\Journal\<source>\<topic>.jsonl` (+ `.deadletter.jsonl`).
+**The three rules:**
+1. **Caller = enqueue only.** No disk, ever, on the publish call. The ≤1 ms bound is unconditional (TestKit-asserted under disk co-load — see §11).
+2. **Single journal writer.** Only the journal thread touches journal files. Callers enqueue `Append`; the pump enqueues `Acked(seq)`/`Nacked(seq)`. **"Delete" = an appended ack-tombstone** `{"ack": seq}` — O(1), append-only, crash-safe (replay = entries minus tombstones, seq order). Compaction (threshold + all-acked prefix): journal thread writes survivors to tmp → `FlushFileBuffers` → atomic `ReplaceFile`; no racing appender exists by construction.
+3. **Honest durability contract (class A):** durable against **process crash immediately** (the buffered write survives process death in the OS page cache); durable against **power loss within the group-commit interval (≤ X ms, configured)**. Acceptable because scan results also exist at their stable file path — power-loss recovery is a higher-layer replay. The old "flush-per-append buys absolute durability" framing is dropped; it bought a broken latency bound instead.
+
+- **Journal cap policy (per topic, CC-CM16):** `scan.committed` → refuse-new + loud alarm at cap; `tool.telemetry(err)` → drop+count beyond cap. **A journal-append failure (disk full/error) never throws to the caller** — fail-publish-with-counted-error + alarm.
+- **Placement/quotas (CM9):** journals + spool on the system volume, **separate from scan-result/tile/zip data**; journal cap per topic (default 100k entries / 256 MB, alarm at 50%), spool 1 GB, bus-tap ring 512 MB. P0's fsync measurement runs **under co-load** (concurrent 100 MB/s writer on the same volume).
+- **Disconnected/broker-down:** enqueue continues; class A accumulates in the journal, B/C in the bounded memory queue (coalesce/drop per class). Reconnect algorithm (CM1): **replay journal strictly in seq order to recorded high-water H, then drain the live queue discarding class-A entries ≤ H** — per-source FIFO holds; the caller never pauses.
+- Journal path: `C:\Camtek\Bus\Journal\<source>\<topic>.jsonl` (+ `.deadletter.jsonl`). (The earlier "proven `FailedMessagesHandler` pattern" citation is retracted — that component is single-threaded batch retry, not a two-thread hot path.)
 
 ### 6.2 Subscriber dispatch
 
 Per subscription: bounded in-process queue → dispatcher loop → handler. The dispatcher owns the safety obligations:
 
-1. **Dedup** — LRU cache of `messageId` (size- and time-bounded).
-2. **Expiry** — `REQ` frames past `timestampUtc + ttlMs` are discarded + `REPLY(expired)` — never dispatched (the late-execution fix).
+1. **Dedup (CM2)** — primary: **per-(source, topic) seq-contiguity tracking** (highest-contiguous-seq + a small out-of-order window) — O(1) memory, immune to replay-burst size; the `messageId` LRU remains only as a secondary net for R-R redeliveries (its eviction horizon lower-bounded by the redelivery window).
+2. **Expiry (CM3)** — two gates: (a) at dequeue on the dispatcher, measured on a **monotonic clock** captured at frame receipt (NTP-immune); (b) **re-checked as the first statement of the marshaled delegate on the executing thread** — the only sound boundary. Expired anywhere → `REPLY(expired)` / command-expired event; never dispatched, never executed late.
 3. **Catch boundary** — a handler exception is logged + counted, **never** escapes to kill the process.
 4. **Poison containment** — `attempts >= N` (default 5) → envelope appended to the dead-letter file + alarm counter; not retried.
-5. **Threading** — handlers run on pool threads. STA/UI marshaling is explicitly the host's job (frmProduction's BusAdapter wraps its handlers in the dispatcher-invoke it already uses today). The library documents this loudly rather than guessing.
+5. **Reply cache (CM3)** — atomic insert-or-get of an **in-progress placeholder** (`GetOrAdd` of a TCS): a concurrent redelivery of an in-flight request awaits the same completion instead of double-executing. Late REPLYs after requester timeout are counted (`reply.late`), never a protocol fault.
+6. **Threading** — handlers run on pool threads. STA/UI marshaling is explicitly the host's job (in AOI_Main: the **MainContext-owned BusAdapter** — a plain class, not a Form; see the AOI design §3.5.2/§3.5.4 — **blocking `Invoke` is banned; `BeginInvoke`-post only**). The library documents this loudly rather than guessing.
+
+### 6.3 Bus-client resilience contract (generalized — CM16)
+
+Every bus client (AOI_Main, ToolManager, GEM shim, gateway, loader shim, native clients) implements: **non-blocking `Connect` with jittered exponential backoff (infinite retry, alarm after T)**; local subscription registration replayed on (re)connect; a **per-process degraded signal** (each process defines what it refuses/degrades when the bus is dark — AOI: §3.5.3b; GEM shim: fabric Part III degraded table; gateway `:5007`: immediate "fabric unavailable"); **requester-side deadline mandatory on every `RequestAsync`** (receiver-side Ttl alone cannot break cross-process wait cycles). Class-B subscribers receive the **retained last value** on subscribe (§7) — no initial-state fetch needed.
 
 ---
 
@@ -219,16 +245,28 @@ Per subscription: bounded in-process queue → dispatcher loop → handler. The 
 
 Single net8 console process, ToolHost child, no config mutation at runtime.
 
-- **Connection manager:** pipe server, one duplex connection per process; identity = pipe-authenticated account + `HELLO.sourceName`; rejects publishes that violate the topic's publish ACL.
-- **Per-subscriber queues:** `Channel<Envelope>` per (subscriber, topic), bounded:
-  - **Class A** — capacity hit → `NACK` to publisher (message stays in *publisher's* journal; broker memory can't be exhausted by the guaranteed-slow gateway).
-  - **Class B** — coalesce: replace queued value per key (topic default: whole topic; optional per-carrier key).
-  - **Class C** — drop-oldest + increment `dropped` counter (never silent).
+- **Connection manager:** pipe server, one duplex connection per process; identity = pipe-authenticated account + `HELLO.sourceName`; rejects publishes that violate the topic's publish ACL. **Per-connection outbound writer task** (CM4) drains that connection's queues with a write deadline — a suspended/full subscriber is disconnected, never allowed to stall siblings (class A stays journal-protected, B coalesces, C drops-and-counts).
+- **Class-A end-to-end ack semantics (CC3, normative):** `E2E_ACK` is issued per **(message, expected-subscriber-set snapshotted at PUB time)**. A subscriber that disconnects or unsubscribes is removed from every pending set it appears in — its durability claim ends with its registration (the zero-subscriber rule below is the degenerate case). Publisher disconnect purges its routing entries. The tracking map is bounded by the sum of per-subscriber queue capacities — asserted in the broker contract tests.
+- **Per-subscriber queues:** bounded, per (subscriber, topic):
+  - **Class A** — capacity hit → `NACK` to publisher (message stays in *publisher's* journal; broker memory can't be exhausted by the guaranteed-slow gateway); `RESUME` sent when the queue drains below low-watermark.
+  - **Class B** — coalesce via a **locked keyed-slot structure with atomic dequeue-marks-consumed** (CM4 — a naive replace-in-channel loses updates); contract test: N concurrent publishers on one key ⇒ delivered value = seq-max. **Class B is retained**: the broker keeps the last value per (topic, key) and delivers it to every new subscriber on subscribe (CM11 — deletes the initial-state-fetch problem class).
+  - **Class C** — drop-oldest + increment `dropped` counter (never silent); drop counters wired to an alarm threshold.
 - **No broker persistence** — deliberate. Durability lives in publisher journals; the broker restart story is "clients reconnect and replay." Keeps the broker small enough to essentially never change (its updates silence the fabric, so rarity is a feature — maintenance-window-only).
-- **Heartbeat:** `PING/PONG` with a monotonic token; ToolHost's health probe calls a broker self-check endpoint (pipe frame, not HTTP) — detects a hung event loop, not just process death.
-- **Counters:** per-topic published/delivered/dropped/dead-lettered/NACKed + per-source `seq` high-water marks, exposed to ToolHost (:5100) — the field engineer's "where is my event" answer.
+- **Zero-subscriber policy (class A):** a class-A publish on a topic with **no registered durable subscriber** (e.g. `scan.committed` on a gateway-disabled tool) is **immediately acked + counted** — the publisher's journal entry deletes; no unbounded disk growth on partial-profile fleets. Broker contract test.
+- **Heartbeat:** `PING/PONG` with a monotonic token, **priority-dequeued ahead of data**; the ToolHost probe (pipe frame, not HTTP — a new ToolHost probe type) receives **measured loop lag**, so ToolHost distinguishes *degraded/lagging* (no action beyond alarm) from *hung* (restart) — congestion is never converted into a self-inflicted outage. The hung threshold is sized from the high-rate tier, not the control tier.
+- **Counters:** per-topic published/delivered/dropped/dead-lettered/NACKed + per-source `seq` high-water marks — **pushed to ToolHost on every heartbeat** (CC8), so the last snapshot survives broker death; exposed via :5100.
+- **Supervision (CC8):** the broker's ToolHost child entry is `startOrder: 0`, health = pipe-frame loop-lag probe, **`quarantine: never`** (infinite restarts at max backoff + escalating alarm — quarantining the dependency of every bus citizen converts crash-loop containment into fleet downtime), `priorityClass: AboveNormal` (CM9 — it carries latency-critical R-R frames; DDS must not starve it). The **gateway** child gets the same `quarantine: never` class (sole class-A subscriber). Broker updates remain maintenance-window-only.
 
-Sizing reality check: the tool's event rate is *low* (per-wafer events, state transitions — tens per second peak, not thousands). The design optimizes for **latency bound, isolation, and diagnosability**, not throughput; every buffer can be small.
+### Load model & sizing (normative — CM18)
+
+| Traffic | Nominal | Burst | Storm (post-coalescing, §8b) |
+|---|---|---|---|
+| Per-wafer events (~25–40 msgs/wafer @ 60 wph) | ~0.5–1 msg/s | ~50 msgs in 2 s (wafer end / lot end ×10) | — |
+| `tool.state`/`production.carrier` | ~10/day | — | — |
+| `tool.telemetry` (error, class A) | ~0 | — | **capped at 10 msg/s sustained / 100 burst per source** |
+| `dds.frame.*` (future high-rate tier) | — | — | class C only, own ring |
+
+Derived sizing (each buffer: number + rationale + alarm): broker class-A queue ≥ 2× worst burst (**128**); journal cap **100k entries / 256 MB per topic, alarm at 50%**; gateway channel 1000 ≈ 30 min nominal-burst absorption; dedup seq-window 64; replay in-flight window 32. **P0 publishes measured single-instance ceilings** (broker msg/s + MB/s at p99, journal batch-fsync/s under co-load, FleetSink msg/s, TsmcSink wafers/h) with stated headroom — scale-out is a documented non-requirement with an expiry condition (revisit if the DDS tier exceeds the measured ceiling ÷ 10).
 
 ---
 
@@ -264,7 +302,9 @@ sequenceDiagram
     Note over R: no REPLY within ttl - requester reports failure (HCACK error)<br/>and the expiry check guarantees it cannot run late
 ```
 
-Semantics fixed by the review: **reply = accepted/dispatched, never completed** (matches today's `async void` reality); completion is a separate event on a notify topic. The reply cache gives at-most-once *effect* over at-least-once *delivery*.
+Semantics fixed by the reviews (decision recorded in the concurrency review record §4): **reply = ACCEPTED on successful post to the executing dispatcher** — never completion, and never gated on execution (a blocking wait would park pool threads and re-open the four-party deadlock, AOI review F1). The **final Ttl gate runs as the first statement of the marshaled delegate on the executing thread** (monotonic clock); expired-at-dequeue → a command-expired event + the per-command **compensation** defined by the consumer (e.g. AOI's synthesized `Fire*` completion for external automation). The reply cache gives at-most-once *effect* over at-least-once *delivery* (in-progress placeholder — §6.2.5). **Requester-side deadline is mandatory** (§6.3). Residual windows — host-told-accepted/command-expired — are compensated and documented; they cannot be zero.
+
+**Storm control (§8b, CC12):** `tool.telemetry(error)` carries topic-contract rate control **in the client library**: coalesce by `(source, errorCode)` sliding window (first occurrence immediate; then class-A summaries "code X × N" every 10 s) + token bucket per source (10/s sustained, 100 burst, overflow counted). Without this, class A turns a flapping sensor into a disk/broker/WAN storm that today costs only log lines.
 
 ---
 
@@ -282,16 +322,22 @@ Contract assertions every topic/edge must pass:
 
 | # | Assertion |
 |---|---|
-| 1 | Publish returns ≤1 ms at p99.9 under broker-down, broker-slow, broker-hung |
-| 2 | Per-source FIFO preserved per topic; `seq` gaps detected and counted |
-| 3 | Duplicate delivery absorbed (dedup) — handler side-effects once |
-| 4 | Slow/hung/crashing subscriber never delays publisher or sibling subscribers |
-| 5 | Class A: zero loss across broker kill, broker restart, publisher crash+restart, subscriber outage (verified by **end-to-end delivery count**) |
-| 6 | Class B coalesces; class C drops are counted, never silent |
-| 7 | Expired command never dispatched; redelivered command answered from reply cache |
+| 1 | Publish returns ≤1 ms at p99.9 under broker-down, broker-slow, broker-hung, **and disk co-load** (a concurrent writer saturating the journal volume; a filter delaying flushes 200 ms) |
+| 2 | Per-source FIFO preserved per topic — **including across reconnect replay** (journal-to-high-water-then-live algorithm); `seq` gaps detected and counted |
+| 3 | Duplicate delivery absorbed (seq-contiguity dedup) — handler side-effects once, **including a replay burst larger than any cache** |
+| 4 | Slow/hung/**suspended** subscriber never delays publisher or sibling subscribers; **a publisher's own bulk backlog never delays its own `REQ`/`REPLY` frames** (priority lanes) |
+| 5 | Class A: zero loss across broker kill, broker restart, publisher crash+restart, subscriber outage, **and gateway crash between DELIVER_ACK and sink persistence** (WAL ordering) — verified by **end-to-end delivery count** |
+| 6 | Class B coalesces (concurrent-publish test: delivered = seq-max) **and retained value delivered on subscribe**; class C drops are counted, never silent |
+| 7 | Expired command never dispatched **and never executed late** (dequeue-gate test: command queued behind a 5 s stall must not run); redelivered in-flight command executes once (placeholder test) |
 | 8 | Poison message dead-letters after N attempts; process survives handler exceptions |
 | 9 | Unknown envelope/payload fields ignored (mixed-version tolerance) |
 | 10 | ACL: unauthorized publish rejected + audited |
+| 11 | **NACK-with-healthy-pipe**: a class-A message NACKed N times with the connection up is delivered within T of queue drain (redelivery schedule + `RESUME`) |
+| 12 | **Broker restart under load** with 3 publishers holding full journals → convergence without NACK oscillation (jitter + paced replay + credit) |
+| 13 | **R-R round-trip p99 < X ms while the same pipe carries saturated bulk traffic** (class-A replay + class-C burst) |
+| 14 | **T-L1 soak** 100 msg/s × 8 h (flat memory/journal) · **T-L2 burst** 1000 msgs/1 s drained < 30 s, no NACK cascade · **T-L3 storm** 1 kHz errors × 60 s → downstream ≤ 10 msg/s, publish bound held · **T-L4 outage-drain** 1 h backlog drains without restart < 10 min · **T-L5** = assertion-1 co-load variant · **T-L6 herd** 100 simulated gateways register + drain against one Fleet endpoint with jitter verified |
+
+The composite scenarios (5, 11, 12, 13, T-L) exist because every reviewed failure lived in **hand-offs under concurrency** while component-isolated tests passed.
 
 Fault-injection harness: scriptable broker (delay/drop/kill/hang per frame type) + a mock slow subscriber — used both in CI and in the P0 torture test (whose pass criteria are assertions 1, 4, 5 under sustained load).
 
@@ -358,7 +404,7 @@ Each adoption is its own funded mini-program with the same gate: contract kit + 
 ## 13. Open Decisions
 
 1. **Broker build vs. embed** (NATS-class) — the protocol above is small enough to build; embedding trades code for a licensing/fab-qualification review. P0 decides with the torture test + procurement.
-2. **Journal fsync policy** — flush-per-append (safest, still <1 ms) vs. batched flush (faster, small crash window). Measure in P0 on tool-grade disks.
+2. **Journal group-commit interval (X ms)** — the flush policy itself is **decided** (group commit on the journal-writer thread, §6.1 rev. 3; flush-per-append is rejected — its "<1 ms" claim was false under load and it broke the publish bound). Open: the value of X (power-loss window vs. flush rate), measured in P0 on tool-grade disks **under co-load**.
 3. **Class-B coalesce keys** per topic (whole-topic vs. per-carrier for `production.carrier`).
 4. **Dead-letter re-injection tool** UX — manual CLI only (recommended) vs. ToolHost API.
 5. **Bus-tap retention** — rolling size/time budget on a tool PC disk.

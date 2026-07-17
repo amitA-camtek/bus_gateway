@@ -6,15 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `c:\Users\amita\Desktop\camtek` is an **architecture reference workspace** for the Camtek Falcon AOI project. It contains detailed design documents, not source code. The actual monorepo is at `C:\CamtekGit\` — start there for any code changes.
 
+**Start with [LEGEND.md](LEGEND.md)** — the index of all documents, the folder structure, and the normative-vs-historical rules. Folders: `01-proposal\` (authoritative designs — implement from these) · `02-reviews\` (audit trail) · `03-inputs\` (independent analyses) · `04-history\` (superseded, banner-marked) · `05-reference\` (pre-existing docs about today's system).
+
 ---
 
 ## Reference documents here
 
 | File | What it covers |
 |------|---------------|
-| [frmProduction.md](frmProduction.md) | Deep reference for `frmProduction` — the invisible GUI-side COM controller in Falcon.Net. Covers its four COM wrappers, the 25 `Fire*` event bridge methods, all callers of `ChangeToolState`, and how ToolGateway (gRPC) connects via `frmScanTab` (not through `frmProduction`). |
-| [falcon-aoi-architecture-reference.md](falcon-aoi-architecture-reference.md) | Full system block diagram: Falcon AOI ↔ factory host (SECS/GEM), ↔ ToolGateway (gRPC :5005), ↔ Fleet.Main and TSMC cloud. Includes the Enter-Production sequence and tool state machine. |
-| [frmProduction-architecture.svg](frmProduction-architecture.svg) | Rendered architecture diagram (opens in any browser). Mermaid source is in `.mmd`. |
+| [frmProduction.md](05-reference/frmProduction.md) | Deep reference for `frmProduction` — the invisible GUI-side COM controller in Falcon.Net. Covers its four COM wrappers, the 25 `Fire*` event bridge methods, all callers of `ChangeToolState`, and how ToolGateway (gRPC) connects via `frmScanTab` (not through `frmProduction`). |
+| [falcon-aoi-architecture-reference.md](05-reference/falcon-aoi-architecture-reference.md) | Full system block diagram: Falcon AOI ↔ factory host (SECS/GEM), ↔ ToolGateway (gRPC :5005), ↔ Fleet.Main and TSMC cloud. Includes the Enter-Production sequence and tool state machine. |
+| [frmProduction-architecture.svg](05-reference/frmProduction-architecture.svg) | Rendered architecture diagram (opens in any browser). Mermaid source is in `.mmd`. |
 
 ---
 

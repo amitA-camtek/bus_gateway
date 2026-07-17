@@ -1,10 +1,10 @@
 # Falcon AOI — Architecture Review & ToolGateway Consolidation Investigation
 
 > Senior architecture review of the Falcon AOI system and investigation into removing/merging ToolGateway.
-> Sources: [frmProduction.md](frmProduction.md), [falcon-aoi-architecture-reference.md](falcon-aoi-architecture-reference.md)
+> Sources: [frmProduction.md](../05-reference/frmProduction.md), [falcon-aoi-architecture-reference.md](../05-reference/falcon-aoi-architecture-reference.md)
 > Date: 2026-07-16
 >
-> **⚠ Corrections found by later adversarial review ([a3-fused-design-review.md](a3-fused-design-review.md))** — this doc is kept as the historical record; read it with these fixes: (1) the live SECS/GEM stack is **C# `SecsGemObjects` in the `SecsGemGui.Net` process over the native Cimetrix `SECSGemDriver`** — the C++ `SecsGemClient` is legacy (not in `Falcon_2022.sln`); (2) the COM event hub lives in **`FalconWrapper.exe`** (out-of-proc, 5 client subscribers); (3) frmScanTab's real publish hooks are ~:1888-1902 and :10162 (not :7301); (4) the "<5 ms fire-and-forget, never blocks the scan thread" claim (finding S1 below) is **not true today** — `ToolApiPublisher` can sleep 1s + spawn a process on the scan thread and has no gRPC deadline, and its failed-message file is never read back (review T3/T4).
+> **⚠ Corrections found by later adversarial review ([a3-fused-design-review.md](../02-reviews/a3-fused-design-review.md))** — this doc is kept as the historical record; read it with these fixes: (1) the live SECS/GEM stack is **C# `SecsGemObjects` in the `SecsGemGui.Net` process over the native Cimetrix `SECSGemDriver`** — the C++ `SecsGemClient` is legacy (not in `Falcon_2022.sln`); (2) the COM event hub lives in **`FalconWrapper.exe`** (out-of-proc, 5 client subscribers); (3) frmScanTab's real publish hooks are ~:1888-1902 and :10162 (not :7301); (4) the "<5 ms fire-and-forget, never blocks the scan thread" claim (finding S1 below) is **not true today** — `ToolApiPublisher` can sleep 1s + spawn a process on the scan thread and has no gRPC deadline, and its failed-message file is never read back (review T3/T4).
 
 ---
 

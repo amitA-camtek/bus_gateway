@@ -1,6 +1,6 @@
 # A3 Fused Design — Consolidated Adversarial Review
 
-> Three independent reviews of [a3-fused-bus-gateway-design.md](a3-fused-bus-gateway-design.md): technical feasibility (verified against `C:\CamtekGit`), design consistency/gaps, and production-operations. Findings deduplicated and ranked.
+> Three independent reviews of [a3-fused-bus-gateway-design.md](../04-history/a3-fused-bus-gateway-design.md): technical feasibility (verified against `C:\CamtekGit`), design consistency/gaps, and production-operations. Findings deduplicated and ranked.
 > Date: 2026-07-16.
 
 ---
