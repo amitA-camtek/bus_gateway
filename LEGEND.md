@@ -11,12 +11,15 @@
 camtek\
 ├── LEGEND.md            ← this file (the index)
 ├── CLAUDE.md            ← workspace guide for Claude Code sessions
+├── stage\               ← presentation package: top-down, no-duplication design set
 ├── 01-proposal\         ← THE authoritative design set (implement from these)
 ├── 02-reviews\          ← review records / audit trail (read-only history)
 ├── 03-inputs\           ← independent source analyses (input evidence)
 ├── 04-history\          ← superseded designs kept as the decision record
 └── 05-reference\        ← pre-existing docs describing TODAY's system
 ```
+
+**`stage\`** ([stage/README.md](stage/README.md)) is the hierarchically-ordered package derived from `01-proposal\`: [1 system architecture](stage/01-system-architecture.md) → [2 AOI drill-down with component designs + code snippets](stage/02-aoi-architecture.md) → [3 four-lanes appendix (per-lane complete designs)](stage/03-appendix-four-lanes.md) → [4 impact analysis (projects to modify)](stage/04-impact-analysis.md). Each fact appears in exactly one stage doc; `01-proposal\` remains normative for full detail (risk registers, TestKit, wire protocol, roadmap gates).
 
 ## Recommended reading order
 
