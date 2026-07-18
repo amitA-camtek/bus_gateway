@@ -35,7 +35,7 @@ flowchart TB
     STN --> KWN
 ```
 
-What disappears from AOI_Main: ~5–7 singleton processes' connections, the `:50055` external exposure (gateway proxy → later deletion), the `ToolApiPublisher` push, four COM wrapper classes, and per migrated edge the `*CB` sink registrations.
+What disappears from AOI_Main: ~5–7 singleton processes' connections, the `:50055` listener (**loopback-bound today**, `clsCMM.cs:35` — contained via the gateway proxy as EOL-runtime hygiene, then later deleted; it is *not* the external door — that is ToolGateway :5005 on `0.0.0.0`), the `ToolApiPublisher` push, three COM wrapper classes + the raw `CFalconEvents` ref, and per migrated edge the `*CB` sink registrations.
 
 ## 2.2 Component: BusAdapter
 
@@ -48,7 +48,7 @@ flowchart TB
         SUBA["Subscriptions"]
         T1["Ttl gate #1 (dispatcher,\nmonotonic clock)"]
         MODE["Sim/VVR gate (central)"]
-        SER["Command serialization gate\n(one gui.command in flight -\ndeferred during state transitions)"]
+        SER["Command serialization gate\n(one gui.command in flight -\nsecond command = reject-busy)"]
         UM["UiMarshaller - BeginInvoke post"]
         T2["Ttl gate #2 - re-check at dequeue\n(first statement on UI thread)"]
         SRV["Request/reply server + reply cache"]
@@ -87,37 +87,39 @@ sequenceDiagram
 // BusAdapter.ServeGuiCommands — the deadlock/late-execution kill.
 // RULES (review CC9): blocking Invoke is BANNED; reply = ACCEPTED on post;
 // Ttl re-checked as the FIRST statement on the executing (UI) thread.
+// Handler shape is Func<BusMessage<T>, Task<Reply>> (§6.2) — replies are wrapped in a Task.
 _bus.Serve<GuiCommandPayload>(Topics.GuiCommands, msg =>
 {
     // Gate #1 — dispatcher thread, monotonic clock captured at frame receipt.
     if (msg.ExpiresAt <= MonotonicClock.Now)
-        return Reply.Expired();                        // never dispatched
+        return Task.FromResult(Reply.Expired());       // never dispatched
 
     if (_simVvrGate.IsOffline(msg))                    // central Sim/VVR gate
-        return Reply.Rejected("offline-mode");
+        return Task.FromResult(Reply.Rejected("offline-mode"));
 
-    if (!_commandGate.TryEnter(msg.RequestId))         // one in flight; defer
-        return Reply.RejectedBusy();                   //   during transitions
+    // One command in flight → REJECT-BUSY (review D-2/CON-4). Busy is NOT expiry: it must never
+    // run the compensation table (that would report a never-accepted command as COMPLETED).
+    if (!_commandGate.TryEnter(msg.RequestId))
+        return Task.FromResult(Reply.RejectedBusy());
 
     bool posted = _uiMarshaller.TryPost(() =>          // BeginInvoke, never Invoke
     {
-        try
+        // Gate #2 — FIRST statement on the UI thread. A command that sat behind a modal
+        // dialog past its deadline must not run.
+        if (msg.ExpiresAt <= MonotonicClock.Now)
         {
-            // Gate #2 — FIRST statement on the UI thread. A command that sat
-            // behind a modal dialog past its deadline must not run.
-            if (msg.ExpiresAt <= MonotonicClock.Now)
-            {
-                _compensations.Run(msg.Command);       // e.g. synthesize ManualScanDone
-                _bus.Publish(Topics.ToolTelemetry, TelemetryEvent.CommandExpired(msg));
-                return;
-            }
-            _dispatch.Execute(msg.Command);            // today's async-void semantics
+            _compensations.Run(msg.Command);           // e.g. synthesize ManualScanDone
+            _bus.Publish(Topics.ToolTelemetry, TelemetryEvent.CommandExpired(msg));
+            _commandGate.Exit(msg.RequestId);
+            return;
         }
-        finally { _commandGate.Exit(msg.RequestId); }
+        // Release the gate on TRUE completion, not the async-void prologue (review S-13/CC-12).
+        Task exec = _dispatch.Execute(msg.Command);    // ICommandDispatch.Execute returns Task
+        exec.ContinueWith(_ => _commandGate.Exit(msg.RequestId));
     });
 
-    return posted ? Reply.Accepted()                   // "queued to the UI dispatcher"
-                  : Reply.Rejected("shutting-down");   // shutdown token set
+    return Task.FromResult(posted ? Reply.Accepted()   // "queued to the UI dispatcher"
+                                  : Reply.Rejected("shutting-down"));
 });
 ```
 
@@ -165,14 +167,15 @@ Pre-fabric absorbed modules (lane C) marshal their COM callbacks through this sa
 sequenceDiagram
     participant BA as BusAdapter
     participant TM as ToolManager
+    participant BUS as Bus
     participant R as ToolStateReactions
 
     BA->>BA: subscribe tool.state (events buffered from here)
     BA->>TM: fetch snapshot (COM today - retained class-B post-P3)
-    Note over TM: stateSeq is stamped INSIDE the transition-commit lock -<br/>snapshot, COM CB and bus event all carry the same counter
+    Note over TM: stateSeq is stamped inside a transition-commit lock that MUST BE INTRODUCED<br/>(ToolManager has no such lock today - Wave-0 item) - snapshot, COM CB<br/>and bus event then all carry the same counter
     TM-->>BA: snapshot (state=Engineering, stateSeq=100)
     BUS->>BA: buffered event (Production, stateSeq=101)
-    BA->>R: apply snapshot IF 100 >= lastApplied - then replay buffer (101)
+    BA->>R: apply snapshot IF 100 newer-than lastApplied - then replay buffer (101)
     Note over R: single application point (UI thread) - total order -<br/>the stale-snapshot-overwrites-newer-event race is structurally closed
 ```
 
@@ -204,6 +207,30 @@ void ApplyIfNewer(ToolState s, long seq)
     _reactions.Apply(s);                         // ToolStateReactions - atomic block,
 }                                                // never split across disciplines (P3 rule)
 ```
+
+### R-8 resolution — introducing transition serialization into ToolManager (design-complete, code-verified)
+
+> **Status: design-complete and verified against the real code; implementation + test-run pending P3.** This is as closed as a design review reaches — the remaining work is writing and running the P3 code, not deciding the design.
+
+**Verified against `C:\CamtekGit` (not "provisional").** `ToolManager` is a **COM `ISingleton`** (`ToolManager.cs:21`) hosted in a holder process; multiple client *processes* call `IToolManager.ChangeToolState` over COM. `_toolState` is a plain field (`:879`) written **unlocked** in `FireToolStateChanged` (`:782`); `ChangeToolStateInternal` (`:822-877`) has no lock/`Interlocked`. The fan-out `ToolEvents.ToolStateChanged` → `CallbackHandler.Call` (`ToolEvents.cs:50`) is **synchronous and in-line on the calling thread** — each subscriber is a cross-process `IToolManagerCB` COM callback invoked directly (a throwing subscriber is silently unsubscribed, `CallbackHandler.cs:107-111`; a hung one stalls the loop, no timeout). There is **no existing dispatcher thread** to ride — transitions arrive on arbitrary COM RPC threads.
+
+**Complete writer census (grep-verified across all `BIS\Sources` — `\.ChangeToolState\s*\(`):**
+
+| Writer | Site | Process |
+|---|---|---|
+| AOI production controller | `frmProduction.cs:540` (from `frmJobTab.cs:1342,:1375` + `clsInitAOI.cs:328`) | AOI_Main |
+| AOI state re-check | `frmProduction.CheckState` → `frmProduction.cs:648` | AOI_Main |
+| Production GUI | `ProductionGui.NET\frmProductionGuiBL.cs:305` | **separate process** |
+| Buffer station | `BufferStationManager\ToolManagementAdapter.cs:87, :105` | **separate process** |
+| Internal engine (reentrant) | `ChangeToolStateInternal` `:229, :247`; `EnterProduction`/`LeaveProduction` fan-outs `:384,:445,:482,:520` | ToolManager itself |
+
+The three client processes call **concurrently** over COM — the unlocked `_toolState` is a genuine cross-process race, not a theoretical one.
+
+**Mechanism — lock the stamp, fan out *outside* the lock (grounded in the above).** A bare `lock` held **across** the synchronous cross-process fan-out would deadlock: a subscriber's callback, running in another apartment, can call back into a ToolManager getter that needs the same lock (the CC-8 cross-apartment reentrancy cycle). Resolution: a short lock covers **only** `_toolState = new; stateSeq = ++counter;` and captures an immutable `(prev, new, seq)` record; the record is handed to a **single-consumer fan-out worker** that drains in `seq` order and performs the COM callbacks + `tool.state` publish **with no lock held**. This gives *total ordering* (one worker, seq order) **and** no lock across COM. Callbacks then fire on the worker thread rather than the caller's — a decoupling that also stops a hung subscriber from stalling the caller (fixes the `CallbackHandler` no-timeout stall). This is lighter than a full single-dispatcher-owns-everything redesign and fits a COM singleton with no existing pump.
+
+**Deadlock-audit method (the P3 spike executes this against the build):** for each census writer, confirm the call mutates+stamps under the lock and returns without waiting on the fan-out worker; confirm no `IToolManagerCB` subscriber, inside its callback, makes a *synchronous* call back into ToolManager that would await the worker; the worker never calls back into a caller synchronously. **Acceptance test:** all three client processes drive concurrent transitions + reentrant internal transitions under load → (a) every `stateSeq` unique + monotonic, (b) snapshot / COM CB / bus event for one transition carry the same counter, (c) no deadlock over a soak with a mutual-callback canary.
+
+**What remains (P3 implementation, not design):** write the lock + worker in `ToolManager.cs`/`ToolEvents.cs`, run the acceptance test on the real build. The design and the deadlock argument are settled here.
 
 ## 2.5 Component: ServiceClients (the `Connect()` seam)
 
@@ -277,7 +304,7 @@ Lane rules: [03-appendix-four-lanes.md](03-appendix-four-lanes.md). Phases/waves
 |---|---|---|---|
 | MachineSrv.exe (`IMachineCallback`, XYTable, ChuckNavigator) | **KEEP** → BUS(events) later | Motion COM stays; future `machine.efem.state`/`machine.safety.alarm` topics gated on the multi-PC census | Own program |
 | EfemSrv.exe (`IAutoLoader/CB`, `IDoorCB`) | **BUS(events) + KEEP(cmds)** | `loader.events` (class C) replaces CB events; wafer-move commands stay COM | P2 |
-| ScenarioManager.exe (ScanManager, inking, DDS-node status) | **KEEP — AOI republishes** | Untouched; AOI's BusAdapter republishes `scan.operations` + `scan.dds-node-status` from its existing COM callbacks. ⚠ Host-process reconciliation (A-2) before P2 | P2–P3 (AOI-side) |
+| ScenarioManager.exe (ScanManager, inking, DDS-node status) | **KEEP — AOI republishes** | Untouched; AOI's BusAdapter republishes `scan.operations` + `scan.dds-node-status` from its existing COM callbacks. ⚠ Host-process reconciliation (A-2) before P2. ⚠ **`scan.dds-node-status` rate is unmeasured** (native `PizzasConnectionStatus` emit period) — P0 must measure it before it is sized/registered; per-ink-dot `GetInkingParams` (defect-scaling) **never rides the bus** | P2–P3 (AOI-side) |
 | FalconWrapper.exe (external control + `Fire*` hub) | **KEEP (frozen façade) — AOI-side bridge** | Customer contract; the exe is never modified and never a bus client; 5 subscriber processes served by dual-publish | P2–P4 (AOI-side) |
 | SecsGemDriver (`IS12` wafer maps) | **KEEP** | Fab-qualified S12 exchange, unchanged | — |
 | WaferMapServer.exe | **CONS candidate** *(census)* | Absorb if sole-consumer confirmed | Track C |
@@ -304,7 +331,7 @@ Lane rules: [03-appendix-four-lanes.md](03-appendix-four-lanes.md). Phases/waves
 | Link | Lane | Target |
 |---|---|---|
 | ADC inference client (:5000), CMM gRPC client | **KEEP → hygiene** | Stay; migrate off EOL Grpc.Core to `Grpc.Net.Client` with the SVC client policy |
-| **Hosted `CmmReceiverServer` :50055** | **CONTAIN → SPLIT** | Wave 2: gateway gRPC proxy (external surface closed, no CMM contract change — by-value maps and the operator-modal reply keep working); the per-operation split (notifications → bus; bulk maps → pointer handoff; `ExportMapConfirmation` exempted from Ttl'd request/reply) only via negotiated CMM contract change. SPC.exe hosts a second receiver — same containment when in scope |
+| **Hosted `CmmReceiverServer` :50055** | **CONTAIN → SPLIT** | **Loopback-bound today** (`clsCMM.cs:35`) — containment is EOL-Grpc.Core-runtime hygiene, not external-surface closure. Wave 2: gateway gRPC proxy (no CMM contract change — by-value maps and the operator-modal reply keep working); the per-operation split (notifications → bus; bulk maps → pointer handoff; `ExportMapConfirmation` exempted from Ttl'd request/reply) only via negotiated CMM contract change. (SPC.exe's second receiver is **commented-out dead code today**, `frmMain.frm:2119-2121` — no live second listener; revisit only if it is ever enabled) |
 | STIL + TilePool MMF | **KEEP** | Data plane by design — the bus carries pointers only |
 | Grabbing libraries (TCP+MMF inside) | **KEEP** | In-proc library boundary |
 | PubSub `Publish` sites | **BUS** | This *is* P1a — the existing seam |

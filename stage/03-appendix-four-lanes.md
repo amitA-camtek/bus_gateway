@@ -127,7 +127,7 @@ public static readonly Topic ToolTelemetry =
 
 #### The `Fire*` hub edge → `scan.operations` / `scan.announced` (P2 — the biggest diff)
 
-- **Today:** ~25 `Fire*` methods (~40 call sites) push through `frmProduction` into the `FalconWrapper.exe` COM hub; 5 external client processes subscribe there; each method carries its own Sim/VVR short-circuit.
+- **Today:** ~23 `Fire*` methods across **~80 call sites in 12 files** (verified census — the earlier "~40" was ~2× low) push through `frmProduction` into the `FalconWrapper.exe` COM hub; 5 external client processes subscribe there; each method carries its own Sim/VVR short-circuit.
 - **What happens:** call sites become one-line publishes via the BusAdapter (central Sim/VVR gate); **dual-publish into the hub continues** so its 5 subscriber processes never notice; the 3 ref-returning `Fire*` ops move to the `scan.operations.requests` R-R topic. The hub edge itself retires only per-subscriber — possibly never (customer contract, lane D).
 - **Gate/risk:** mechanical but wide; the payload contract (`scan.announced` carries **no file paths**) structurally closes the half-copied-results race.
 
@@ -140,13 +140,13 @@ public static readonly Topic ToolTelemetry =
 #### Tool state → `tool.state` (P3 — small diff, high semantics)
 
 - **Today:** `IToolManagerCB.OnToolStateChanged` fan-out from ToolManager's `CallbackHandler` (synchronous, per-subscriber, undefined stall behavior).
-- **What happens:** ToolManager dual-publishes `tool.state` (class B, **retained**) with **`stateSeq` stamped inside the transition-commit lock**; subscribers (GUI BusAdapter, GEM shim, gateway) flip after shadow; the CB fan-out retires per subscriber. Reaction blocks migrate **atomically — never split** across COM and bus.
+- **What happens:** ToolManager dual-publishes `tool.state` (class B, **retained**) with **`stateSeq` stamped inside a transition-commit lock that must first be introduced** (it does not exist today — R-8/FEA-1); subscribers (GUI BusAdapter, GEM shim, gateway) flip after shadow; the CB fan-out retires per subscriber. Reaction blocks migrate **atomically — never split** across COM and bus.
 - **Gate/risk:** the sync→async drift risk lives here — shadow comparator + `stateSeq` pairing are the mitigations; three lines of code, the most-watched flip of the program.
 
 #### Host GUI commands → `gui.commands` (P4)
 
 - **Today:** host → `CFalconExternalControl` COM → `ExternalControlCbUiWrapper` → synchronous, timeout-less call into the GUI.
-- **What happens:** the GEM shim publishes R-R `gui.commands` (Ttl from site E30 config); AOI serves them through the two-stage Ttl gate + BeginInvoke; the wrapper's ~15-callback surface dispatches in-proc (it never becomes a bus publisher — ACL preserved); expiry runs the compensation table.
+- **What happens:** the GEM shim publishes R-R `gui.commands` (Ttl from site E30 config); AOI serves them through the two-stage Ttl gate + BeginInvoke; the wrapper's ~18–21-callback surface dispatches in-proc (it never becomes a bus publisher — ACL preserved; only `GuiStartManualScan`/`GuiExportMap` were ever forwarded to frmProduction); expiry runs the compensation table.
 - **Gate/risk:** host-visible behavior must stay identical — FlaUI + GEM record-replay gated.
 
 #### Production control → `tool.commands` / `production.carrier` (P5 — optional, per customer)
@@ -332,11 +332,11 @@ Order: RobotUI (census PASSED — but it brings its own MachineSrv/EFEM/WafersDB
 - **What happens:** the purest consolidation — utilities have no business running as a process; the assembly becomes a plain library reference and the singleton hop disappears. No events, no pump, no hardware.
 - **Two gates first:** the census must confirm no other process consumes it, and the object-graph getters must be verified free of COM-marshaling assumptions (callers receiving sub-objects must get plain .NET objects).
 
-#### WaferMapServer.exe (census pending — the odd one out: native)
+#### WaferMapServer.exe (census pending)
 
-- **Today:** a **native ATL COM server** (outbound-only from AOI: `Utils\WaferMapConnector.cs:13-35`) hosting wafer-map display.
-- **What happens if census PASSES:** absorption for a native server means **out-of-proc EXE → in-proc COM DLL** (same COM interfaces, loaded into AOI_Main) — not a .NET event conversion. The process disappears; the COM calls become in-process calls.
-- **Extra feasibility gate:** unlike the .NET modules, this needs a check that the ATL server can run as an in-proc DLL (threading model, resource ownership, display handles on AOI's UI thread). If that fails — or the census finds another consumer — it stays **lane D**, unchanged.
+- **Today:** a **C# WinForms out-of-proc COM server** (`Components\WaferMapServer\`, verified — *not* native ATL as earlier stated; outbound-only from AOI: `Utils\WaferMapConnector.cs:13-35`) hosting wafer-map display.
+- **What happens if census PASSES:** because it is managed, absorption is the **standard .NET module pattern** (direct assembly reference, in-proc instance, form on AOI's UI thread) — *easier* than the special native-server handling previously planned. The process disappears; the COM hop becomes an in-process call.
+- **Feasibility gate:** the display form must be created on AOI's main UI thread (single-STA rule, as for RobotUI). If the census finds another consumer it stays **lane D**, unchanged.
 
 #### WaferLoader & BufferStationManager — explicitly NOT in this lane
 

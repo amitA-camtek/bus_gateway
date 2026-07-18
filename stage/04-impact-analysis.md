@@ -27,14 +27,15 @@
 | Phase | Project | Change | Blast radius |
 |---|---|---|---|
 | P1a | `apps\Falcon.Net\AOI_Main.csproj` | + `Camtek.Messaging` reference (binary drop, both bitnesses); publish calls at frmScanTab hooks (~:1888-1902, :10162); BusAdapter skeleton | Low — additive beside `IPublisher` |
-| P1a | `Utilities\ToolGateway\ToolGateway.BL` + `.Endpoint` + `.Tests` | + `BusSource` (WAL-before-ack) + `CommandPublisher` (:5007); net7→net8; **4 spool fixes** (poison/outage split, overflow, periodic drain, backpressured restore) | Medium — gateway release; :5005 kept for dual-run |
+| **Wave 0** | `Utilities\ToolGateway\ToolGateway.BL` (spool) | **4 spool fixes** (poison/outage split, overflow, periodic drain, backpressured restore) = the LB1/LB5 live-bug fixes — ship in **Wave 0**, ahead of P1a (see §5.2 and Track D) | Medium — gateway release |
+| P1a | `Utilities\ToolGateway\ToolGateway.BL` + `.Endpoint` + `.Tests` | + `BusSource` (WAL-before-ack) + `CommandPublisher` (:5007); net7→net8. **:5007 default-deny authz is a P1a exit criterion** (security work-stream, [05 §5.6](05-roadmap-and-risks.md)) | Medium — gateway release; :5005 kept for dual-run |
 | P1a | `apps\Falcon.Net\Classes\clsInitAOI.cs` | Remove `EnsureToolGatewayRunning` → `EnsureBusRunning`; non-blocking bus connect | Low, flag-guarded |
 | P1b | `system\CamtekSystem` (`PubSub\ToolApi\*`, `PublisherFactory`) | Retire `ToolApiPublisher` + `toolapi.proto`; later MSMQ/RabbitMQ variants | Medium — shared assembly rebuild, no API break |
-| P2 | `apps\Falcon.Net`: `Forms\frmScanTab.cs`, `Forms\frmProduction.cs`, `Modules\modWaferAlignment.cs`, `Forms\frmVerifyTab.cs`, `Cmm\CmmReceiverApiRequetsHandler.cs` | ~40 `Fire*` sites → publish; frmProduction wrappers → BusAdapter/UiMarshaller/ToolStateReactions (staged); dual-publish into FalconWrapper continues | **High file-count, mechanical** — the program's biggest AOI diff |
+| P2 | `apps\Falcon.Net`: `Forms\frmScanTab.cs` (~50 sites), `Forms\frmProduction.cs`, `Forms\frmMain.cs`, `Modules\modWaferAlignment.cs`, `Forms\frmVerifyTab.cs`, `Cmm\CmmReceiverApiRequetsHandler.cs`, `LoginController.cs`, `Classes\clsInitAOI.cs`, `clsMultiRecipe.cs`, `ExternalCoordSystemsAlign.cs`, `clsCalibrationManager.cs`, `MainContextModule.cs` | **~80 `Fire*` call sites across 12 files** (verified count — ~2× the earlier "~40" estimate); frmProduction wrappers → BusAdapter/UiMarshaller/ToolStateReactions (staged); dual-publish into FalconWrapper continues | **High file-count, mechanical** — the program's biggest AOI diff; **effort re-priced ~2×** |
 | P2 | EFEM/AutoLoader COM server *(project per census)* | `loader.events` publish shim | Low — additive |
 | P2–P4 | `ToolManagement\FalconWrapper` (vcxproj) | **ZERO change (decided)** — bridge is AOI-side | none |
-| P3 | `ToolManagement\ToolManager` (`Server\ToolEvents.cs` + transition lock) | 3-site dual-publish + **`stateSeq`** stamped in the commit lock | Small diff / **high semantic** — shadow-gated |
-| P4 | `apps\Falcon.Net\CommonUtils\ComServerWrappers\ExternalControlCbUiWrapper.cs` | Full ~15-callback surface → in-proc BusAdapter dispatch + **compensation table** (never a bus publisher) | Med-High — FlaUI + record-replay gated |
+| P3 | `ToolManagement\ToolManager` (`Server\ToolEvents.cs`, `ToolManager.cs` transition path) | **Introduce a transition-serialization lock (does NOT exist today** — FEA-1/R-8); dual-publish + **`stateSeq`** stamped inside it, covering **all** state writers (frmProduction.CheckState, BufferStation ToolManagementAdapter, ProductionGui frmProductionGuiBL, ProductionManager internal — not 3 sites) | **Not a small diff** — introduces locking into the state machine + deadlock audit of the sync CB fan-out; **high semantic**, shadow-gated |
+| P4 | `apps\Falcon.Net\CommonUtils\ComServerWrappers\ExternalControlCbUiWrapper.cs` | Full **~18–21-callback** surface → in-proc BusAdapter dispatch + **compensation table** (never a bus publisher; only `GuiStartManualScan`/`GuiExportMap` were ever forwarded to frmProduction) | Med-High — FlaUI + record-replay gated |
 | P4 | `ToolManagement\SecsGemObjects` (+ `SecsGemGui.Net`) | GEM bus shim (C#): commands + subscriptions + **degraded contract** | Medium — wire untouched |
 | P5 *(optional, per customer)* | `SecsGemObjects\Clients\RemoteControllers\RemoteControl.cs`; ToolManager command intake | `tool.commands` path | **High — re-qual budgeted** |
 
@@ -43,7 +44,7 @@
 | Change | Projects | Blast radius |
 |---|---|---|
 | Pilot (census winner; SystemLogger leading) | New `Camtek.API.<Pilot>` + ToolServices module; AOI seam site per census; **client policy mandatory** (deadline/breaker/fallback) | Low — proves the whole lane |
-| CMM gateway proxy (Wave 2) | Gateway: gRPC forward :5007→:50055 (same contract); CMM reconfigured; :50055 verified localhost-only | Low-Med — closes the external surface early, no CMM contract change |
+| CMM gateway proxy (Wave 2) | Gateway: gRPC forward :5007→:50055 (same contract); CMM reconfigured; :50055 confirmed localhost-only | Low-Med — **EOL-Grpc.Core-runtime containment** (not external-surface closure — :50055 is already loopback-bound; the real external door is :5005, retired at P1b), no CMM contract change |
 | Shared services (WafersDB, InspectionMng, Maintenance, Automation) | Same module pattern + **compatibility façades** for non-AOI consumers (GEM/TAC stack, native C++) | Medium each |
 | Client hygiene | `Camtek.ADC` + CMM client: Grpc.Core → `Grpc.Net.Client` | Low, mechanical |
 | JobProvider (late — disqualified as pilot) | `ToolManagement\JobProvider\*` + compatibility connector; every consumer retests (SecsGem clients, NetTAC, TAC.Net, ProductionGui, RobotUI, C++ `ProcessProgramManager.cpp:84-88`) | High coordination |
@@ -69,29 +70,32 @@ Per module also: `AOI_Main.csproj` (direct reference), installer/DeployUI (exe +
 
 ## 4.3 RETIRED (phase-tagged — deletions, with rollback retention)
 
-| Retired | Phase | Replaced by |
-|---|---|---|
-| `ToolApiPublisher` + `toolapi.proto` + port :5005 (+ firewall rule) | P1b | Bus subscription |
-| `EnsureToolGatewayRunning` | P1a | ToolHost supervision |
-| `IFalconFireEvents` fan-out via FalconWrapper | P2–P4 per subscriber (façade possibly permanent — customer contract) | `scan.*` topics |
-| `IToolManagerCB` fan-out | P3 | `tool.state` (retained) |
-| `IFalconExternalControlCB` full surface | P4 | In-proc dispatch + compensations |
-| `IProductionManagerCB` / `ICarrierExecuterCB` | **P5 only — optional** | `tool.commands` / `production.carrier` |
-| ~5–7 singleton exes + their ROT registrations | Track C, one per release | In-proc modules |
-| `:50055` listener + Grpc.Core server dep | Only at the CMM split (deferred) | Gateway proxy → per-op split |
-| 2 Windows services (`Camtek.DataServer` registration, `Camtek.RMSToolService`) + FAR supervisor service | ToolHost waves | ToolHost children (3 services → 1) |
+> **Rollback-class rule (R-OPS-1):** the moment code is retired, its rollback class **degrades from *flag* to *reinstall*** — the fleet dashboard and the site playbook must both reflect that. A retirement ships **only after the dashboard confirms 100 % of fleet tools (including gateway-disabled and offline tools, via the field-service fingerprint bundle) have run the new path for a full release**. Critically, at **P1b the gateway keeps its `:5005` listener one release longer than any AOI-side `ToolApiPublisher` still exists in the fleet** — otherwise a rolled-back R+1 AOI hitting an R+2 gateway with no `:5005` re-triggers LB2 (scan-thread block). LB2 is therefore fixed in **Wave 0** even though the code retires at P1b — it *is* the rollback path.
+
+| Retired | Phase | Rollback class after retirement | Replaced by |
+|---|---|---|---|
+| `ToolApiPublisher` + `toolapi.proto` + port :5005 (+ firewall rule) | P1b | *reinstall* (gateway keeps :5005 one release past the last AOI publisher) | Bus subscription |
+| `EnsureToolGatewayRunning` | P1a | *flag* | ToolHost supervision |
+| `IFalconFireEvents` fan-out via FalconWrapper | P2–P4 per subscriber (façade possibly permanent — customer contract) | *flag* per subscriber | `scan.*` topics |
+| `IToolManagerCB` fan-out | P3 | *flag* until retention closes, then *reinstall* | `tool.state` (retained) |
+| `IFalconExternalControlCB` full surface | P4 | *flag* | In-proc dispatch + compensations |
+| `IProductionManagerCB` / `ICarrierExecuterCB` | **P5 only — optional** | *reinstall* (re-qual) | `tool.commands` / `production.carrier` |
+| ~5–7 singleton exes + their ROT registrations | Track C, one per release | *reinstall* | In-proc modules |
+| `:50055` listener + Grpc.Core server dep | Only at the CMM split (deferred) | *reinstall* | Gateway proxy → per-op split |
+| 2 Windows services (`Camtek.DataServer` registration, `Camtek.RMSToolService`) + FAR supervisor service | ToolHost waves | *reinstall* | ToolHost children (3 services → 1) |
 
 ## 4.4 Build / deploy / infrastructure
 
 | Item | Impact |
 |---|---|
-| `BIS\build\Falcon_2022.sln` | + Messaging net48 projects; ToolHost/Broker/ToolServices in their own net8 solutions |
-| Binary drops `c:\bis\bin` + `c:\bis\bin\x64` | + `Camtek.Messaging.dll` (both bitnesses; `TreatWarningsAsErrors` applies) |
-| `DeployUI` (`DeployUI2.ps1`, `msbuild.actions.ps1`, `stopall.ps1`) | Publish steps for ToolHost/broker/gateway/ToolServices; stop/start via the ToolHost API instead of process-name kills; per-singleton handling removed as Track C lands |
-| Installers (WiX / RMS installer) | ToolHost `ServiceInstall`; DataServer/RMS re-registration as children; absorbed-module entries removed |
-| `Install\Scripts\ReservePorts.bat` + firewall | + :5060, :5007; − :5005; :50055 localhost-only then removed. Bus needs **no ports** |
-| Config | New: endpoint manifest (ToolHost-owned, hash → fleet fingerprint), `toolbus.json`, children config, ≤5 signed fleet profiles. Journals/spool on the system volume with quotas — separate from tile/zip data |
-| CI (`xbuild\*.yml`) | TestKit + contract suites into PR pipelines; the composite-fault and T-L load scenarios as P0 gates |
+| `BIS\build\Falcon_2022.sln` | + Messaging net48 projects; ToolHost/Broker/ToolServices in their own solutions. **Runtime target: .NET 10 LTS** for the net8-era components (ToolHost/broker/gateway/ToolServices) — .NET 8 is EOL 2026-11, mid-rollout; do not repeat the net7 mistake (R-OPS-6) |
+| Binary drops `c:\bis\bin` + `c:\bis\bin\x64` | + `Camtek.Messaging.dll` (both bitnesses; `TreatWarningsAsErrors` applies). **Runtime servicing on air-gapped fabs: self-contained publish** for the .NET-10 components so a runtime patch ships inside the Camtek installer (no Windows Update / nuget on tool PCs) (R-OPS-6) |
+| `DeployUI` (`DeployUI2.ps1`, `msbuild.actions.ps1`, `stopall.ps1`) | Publish steps for ToolHost/broker/gateway/ToolServices; **`sc stop Camtek.ToolHost` (graceful child drain, R-OPS-3) with failure-actions disabled for the deploy window**, not process-name kills; ToolHost-self-update sequence documented; per-singleton handling removed as Track C lands. **One-time spool migrator** (R-OPS-3): the new gateway, on first start, reads the old-format `FailedMessages-*.txt` + `.overflow.txt`, re-emits through the new WAL, archives the originals — so an in-flight outage backlog is never stranded at upgrade |
+| Installers (WiX / RMS installer) | ToolHost `ServiceInstall`; DataServer/RMS re-registration as children; absorbed-module entries removed. **Config-dir ACL** (write = ToolHost service account only) + **signed-manifest verification** (R-7/§6.8.4) |
+| `Install\Scripts\ReservePorts.bat` + firewall | **Firewall rules for :5007 inbound + :5060; ReservePorts touched only for the :50055 retirement** (5007/5060/5100 sit below the dynamic range — the earlier "ReservePorts +:5060,:5007" was a no-op). − :5005; :50055 localhost-only then removed. Bus needs **no ports** |
+| Config | New: endpoint manifest (ToolHost-owned, **signed + verified**, hash → fleet fingerprint), `toolbus.json`, children config, ≤5 signed fleet profiles **retained on disk for last-known-good boot** (R-OPS-2). Journals/spool on the system volume with quotas + **at-rest ACLs** (R-7/§6.8.5) — separate from tile/zip data |
+| CI (`xbuild\*.yml`) | **TestKit runs on net48 × both bitnesses** (the build AOI actually loads — not net8-only, R-TS-1) + net8/10. **Tier table (R-TS-3):** PR = fast assertions 1–4,6–11 both TFMs (<10 min); nightly = 5,12,13 + T-L2/3/5; release/P0 = T-L1/4/6 + FlaUI + record-replay. Wave-0 exit criterion: the pipeline exists and blocks a deliberately-broken build (today it runs zero tests) |
+| Test instruments (R-TS-2) | **GEM record-replay harness** (built + mutation-qualified: N seeded byte/order mutations → 100 % flagged) and the **shadow comparator** (qualified by an injected-divergence suite, measured false-positive rate) are named Wave-0 deliverables with acceptance criteria — without them the per-edge gate is unenforceable |
 | `Packages\` (local NuGet) | + `System.Threading.Channels` (needs §0.4 approval) |
 
 **Reading the map:** the heaviest single diff is P2's mechanical `Fire*` sweep in `apps\Falcon.Net`; the highest-risk *small* diffs are P3 (`ToolEvents.cs` + `stateSeq`, state-machine semantics) and P5 (`RemoteControl.cs`, re-qual). Everything else is additive new projects or seam-guarded swaps with flag rollback inside a defined retention window.

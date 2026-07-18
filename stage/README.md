@@ -1,5 +1,7 @@
 # Stage — Comprehensive Design Package (self-contained)
 
+> **✅ REVIEW STATUS — DESIGN READY (5th adversarial cycle, resolved).** A fifth cycle added the three dimensions the earlier four omitted — **security, data-integrity, test-strategy** — plus re-runs of the other six. It found ≈8 design-decision gaps (the two headline guarantees were false under gateway/broker/publisher restart); **all are resolved and every fork is decided** (see [stage-review.md](stage-review.md) round-2 verdict + [stage-decision-briefs.md](stage-decision-briefs.md)). Where a resolution had depended on external input, the design was strengthened so it no longer does (gateway-side idempotency, GEM transition-recovery ring, decided mTLS, a code-verified R-8 lock). **"Design READY" ≠ "cleared to fund/build":** what remains ([05 §5.6.1](05-roadmap-and-risks.md)) is normal program governance — ratify, name owners, routine P0 measurements, Wave-0 builds, the P3 code spike, one *optional* cross-team hardening, and one *customer* commissioning choice — not design work. Read the review record before implementing.
+>
 > **Fully self-contained** design set for the Falcon Tool Fabric architecture: this folder can be copied or transferred anywhere and loses nothing — **no link points outside it**.
 > Structured **top-down with no duplication**: every fact lives in exactly one document; the others cross-reference it.
 > Provenance: distilled from the reviewed proposal workspace (repo `bus_gateway`, folders `01-proposal` / `02-reviews` — named here as plain text only, for citation). The underlying design passed 4 adversarial review cycles (13 reviewers: consistency, feasibility-vs-code, operations, concurrency, connectivity, load) with **all critical/major findings resolved and independently verified**.
@@ -27,7 +29,7 @@
 
 - Business case & current-architecture baseline: **only** doc 0.
 - System diagrams and system-component designs: **only** doc 1.
-- AOI internals, code snippets, and the link-disposition table: **only** doc 2.
+- AOI internals, AOI-internal code snippets, and the link-disposition table: **only** doc 2. (Lane and bus code sketches also appear in docs 3 and 6, and are consolidated in `codeSnippets\`.)
 - Lane rules, migration patterns, lane flows: **only** doc 3.
 - Project/file impact: **only** doc 4.
 - Waves, gates, governance, risks, open items, live bugs: **only** doc 5.
