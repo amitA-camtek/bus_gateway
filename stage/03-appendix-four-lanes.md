@@ -1,8 +1,9 @@
 # 3 — Appendix: The Four Lanes (complete design per lane)
 
 > Level: **method** — how every communication link migrates. The lane *rules* are the system-wide ADR; the lane *assignments* for AOI_Main's ~21 links are the disposition table in [02-aoi-architecture.md §2.9](02-aoi-architecture.md).
+> Up-links: system context → [01-system-architecture.md](01-system-architecture.md) · AOI internals → [02-aoi-architecture.md](02-aoi-architecture.md).
 > Lane assignment is by **shape**, decided once: one-to-many events → **A (BUS)** · one-to-one service APIs → **B (SVC)** · sole-consumer helpers → **C (CONS)** · latency-critical / fab-qualified / contractual → **D (KEEP)**.
-> Components referenced here are designed in docs [01](01-system-architecture.md) and [02](02-aoi-architecture.md) — this appendix owns the *migration mechanics* only.
+> This appendix owns the *migration mechanics* only — components are designed in docs 01 and 02.
 
 ---
 

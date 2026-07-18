@@ -1,6 +1,8 @@
 # 4 — Impact Analysis: Projects To Be Created / Modified / Retired
 
-> Level: **repository projects**. Paths relative to `C:\CamtekGit\BIS\Sources` unless noted. Phase tags: `P0–P5` = fabric phases, `Waves 0–2 / Deferred` = the funded plan, lanes per [03-appendix-four-lanes.md](03-appendix-four-lanes.md).
+> Level: **repository projects**. Paths relative to `C:\CamtekGit\BIS\Sources` unless noted. Phase tags: `P0–P5` = fabric phases, `Waves 0–2 / Deferred` = the funded plan.
+> Up-links: system context → [01-system-architecture.md](01-system-architecture.md) · migration lanes → [03-appendix-four-lanes.md](03-appendix-four-lanes.md).
+> Down-link: program plan → [05-roadmap-and-risks.md](05-roadmap-and-risks.md).
 > Verified line references come from the repo investigations; items marked *(census)* are finalized by the Wave-0 censuses.
 
 ---

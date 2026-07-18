@@ -8,13 +8,20 @@
 
 | # | Doc | Contents |
 |---|---|---|
-| 0 | [00-problem-and-current-state.md](00-problem-and-current-state.md) | What "unify" means here, today's two components (verified), why they're separate, and the success criteria |
+| — | [executive-summary.md](executive-summary.md) | **Leadership entry point** — the problem, the two designed options, live bugs, recommended path, and relationship to the bus program |
+| 0 | [00-problem-and-current-state.md](00-problem-and-current-state.md) | What "unify" means here, today's two components (verified), why they're separate, and the six success criteria |
 | 1 | [01-alternatives.md](01-alternatives.md) | Three alternative designs — facade unification / co-hosted merge / unified service — each with a block diagram, what moves vs. stays, pros, cons, effort, reversibility |
-| 2 | [02-recommendation.md](02-recommendation.md) | Comparison matrix and the recommended path, with the phased steps |
-| 3 | [03-alt1-complete-design.md](03-alt1-complete-design.md) | **Complete design of the recommended Alternative 1 (Rev 2, post-review)** — "two doors" architecture, the three sub-designs (lifecycle promotion / single non-host surface / read-only status shim), flows, code sketches, migration phases U0–U2, risks |
+| 2 | [02-recommendation.md](02-recommendation.md) | Comparison matrix and the recommended path, with the phased steps U0–U4 |
+| 3 | [03-alt1-complete-design.md](03-alt1-complete-design.md) | **Complete design of Alternative 1 (Rev 2, post-review)** — "two doors" architecture, the three sub-designs (lifecycle promotion / single non-host surface / read-only status shim), flows, code sketches, migration phases U0–U2, risks |
 | 4 | [04-alt1-review.md](04-alt1-review.md) | **Adversarial review of Alt 1** (feasibility / consistency / operations / security, grounded in `C:\CamtekGit`) — findings + resolutions that produced Rev 2; and the live shipped-code bugs |
-| 5 | [05-alt3-complete-design.md](05-alt3-complete-design.md) | **Complete design of Alternative 3 (the target), taken as the selected design (Rev 2, post-review)** — one supervisor owning **split hosting**: a GUI-independent net7 egress service + a supervised interactive-session net48 control process; corrects the alternatives sketch against the entangled code (no clean API to extract above the GEM wire); out-of-proc TSMC; an enforced fire-and-forget coordination↔egress API; the interactive-session-ROT / Cimetrix-under-restricted-account spikes; phases U0–U3 |
+| 5 | [05-alt3-complete-design.md](05-alt3-complete-design.md) | **Complete design of Alternative 3 — the target (Rev 2, post-review)** — one supervisor owning split hosting: a GUI-independent net7 egress service + a supervised interactive-session net48 control process; out-of-proc TSMC; enforced fire-and-forget coordination↔egress API; the interactive-session-ROT / Cimetrix-under-restricted-account spikes; phases U0–U4 |
 | 6 | [06-alt3-review.md](06-alt3-review.md) | **Adversarial review of Alt 3** (feasibility / consistency / operations / security, grounded in `C:\CamtekGit`) — findings + resolutions, and the (carried-forward) shipped-code bugs |
+
+## Audience map
+
+- **Management / approval:** [executive-summary.md](executive-summary.md) → [02-recommendation.md](02-recommendation.md) §2.3 (the phased path).
+- **Architecture review:** docs 0 → 1 → 2 → 3 + 4 → 5 + 6.
+- **Implementers:** doc 0 (wiring baseline) → doc 3 (Alt 1, build first) or doc 5 (Alt 3, the target).
 
 ## TL;DR
 

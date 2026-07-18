@@ -1,7 +1,8 @@
 # 2 — AOI_Main Architecture (drill-down)
 
 > Level: **process internals** of the hub (`apps\Falcon.Net`, .NET FW 4.8).
-> Up-link: system context → [01-system-architecture.md](01-system-architecture.md). Migration method per link → [03-appendix-four-lanes.md](03-appendix-four-lanes.md). Affected projects → [04-impact-analysis.md](04-impact-analysis.md). The complete link-disposition table is **§2.9 below**.
+> Up-link: system context → [01-system-architecture.md](01-system-architecture.md).
+> Down-links: migration method per link → [03-appendix-four-lanes.md](03-appendix-four-lanes.md) · affected projects → [04-impact-analysis.md](04-impact-analysis.md). The complete link-disposition table is **§2.9 below**.
 > Code snippets are **design-level sketches** (C# 7.3 / net48-compatible) of the critical sections — not production code.
 
 ---
@@ -36,6 +37,106 @@ flowchart TB
 ```
 
 What disappears from AOI_Main: ~5–7 singleton processes' connections, the `:50055` listener (**loopback-bound today**, `clsCMM.cs:35` — contained via the gateway proxy as EOL-runtime hygiene, then later deleted; it is *not* the external door — that is ToolGateway :5005 on `0.0.0.0`), the `ToolApiPublisher` push, three COM wrapper classes + the raw `CFalconEvents` ref, and per migrated edge the `*CB` sink registrations.
+
+### Class design — the new AOI-side components together
+
+(Members realized in [codeSnippets/](codeSnippets/) 05–08 and 11; component contracts in §2.2–§2.5 below.)
+
+```mermaid
+classDiagram
+    class BusAdapter {
+        -IBus _bus
+        -UiMarshaller _ui
+        -ToolStateOrderingBuffer _stateBuffer
+        -CommandSerializationGate _gate
+        -ISimVvrGate _simVvr
+        +RegisterSubscriptions()
+        +FetchAndApplyToolStateSnapshot()
+        +Publish~T~(topic, payload) : facade, ≤1 ms
+        +DispatchExternalCommand(cmd, requestId, ttl) : P4 in-proc path
+        -ServeGuiCommands(msg) Task~Reply~ : two-stage Ttl gate
+        +Dispose() : NEVER on the UI thread
+    }
+    class UiMarshaller {
+        -Control _dispatcher
+        -volatile bool _shutdown
+        +TryPost(work) bool : BeginInvoke-only
+        +TryPostAndWait(work, timeout) bool : UI-thread reentrant-safe (S-8)
+        +RunWhenReady(work) : pre-handle buffer
+    }
+    class CommandSerializationGate {
+        +TryEnter(requestId) bool : one command in flight
+        +Exit(requestId) : in the continuation, not the prologue (S-13)
+    }
+    class ToolStateReactions {
+        +Apply(state) : plain, testable - no COM, no bus
+    }
+    class ToolStateOrderingBuffer {
+        -long _lastAppliedSeq
+        +OnToolStateEvent(e) : ApplyIfNewer(stateSeq)
+        +OnSnapshot(state, seq) : race-safe startup (§2.4)
+    }
+    class ToolStateEvent {
+        +ToolStateEnum State
+        +long StateSeq
+    }
+    class IGuiStateSink {
+        <<interface>>
+    }
+    class IJobStateSink {
+        <<interface>>
+    }
+    class frmProduction {
+        <<thin shell>>
+        delegates to ToolStateReactions
+    }
+    class SystemLoggerConnector {
+        <<static seam>>
+        +Instance ISystemLogger : flag-selected transport
+    }
+    class ISystemLogger {
+        <<interface>>
+        +LogInfo(m, correlationId)
+        +LogWarning(m, correlationId)
+        +LogError(m, ex, correlationId)
+    }
+    class SystemLoggerGrpcProxy {
+        -TimeSpan _deadline : 3 s mandatory
+        -CircuitBreaker _breaker
+        -ISystemLogger _fallback
+    }
+    class SystemLoggerRotProxy {
+        <<legacy path - rollback lever>>
+    }
+    class LocalFileLoggerFallback {
+        <<degraded path>>
+    }
+    class CircuitBreaker {
+        +IsAllowed bool
+        +RecordSuccess()
+        +RecordFailure()
+    }
+    class MonotonicClock {
+        <<static>>
+        +Now DateTime : Stopwatch-based, never wall-clock (S-4)
+    }
+
+    BusAdapter --> UiMarshaller
+    BusAdapter --> CommandSerializationGate
+    BusAdapter --> ToolStateOrderingBuffer
+    ToolStateOrderingBuffer --> ToolStateReactions
+    ToolStateOrderingBuffer ..> ToolStateEvent
+    ToolStateReactions --> IGuiStateSink
+    ToolStateReactions --> IJobStateSink
+    frmProduction ..> ToolStateReactions
+    BusAdapter ..> MonotonicClock : Ttl gates
+    SystemLoggerConnector --> ISystemLogger
+    ISystemLogger <|.. SystemLoggerGrpcProxy
+    ISystemLogger <|.. SystemLoggerRotProxy
+    ISystemLogger <|.. LocalFileLoggerFallback
+    SystemLoggerGrpcProxy --> CircuitBreaker
+    SystemLoggerGrpcProxy --> LocalFileLoggerFallback : degraded
+```
 
 ## 2.2 Component: BusAdapter
 
@@ -259,7 +360,25 @@ The failure policy is not optional: without deadlines + breaker + fallback, the 
 
 ## 2.6 Publisher integration (frmScanTab & friends)
 
-The `Fire*` call sites and result hooks become one-line publishes through the BusAdapter façade; the ≤1 ms bound makes them scan-thread-safe by contract.
+**Responsibility:** replace the two scan-result egress mechanisms (`ToolApiPublisher` gRPC push and, at P2, the relevant `Fire*` sites) with one-line publishes through the BusAdapter façade; the ≤1 ms bound makes them scan-thread-safe by contract.
+
+```mermaid
+flowchart LR
+    subgraph ST["frmScanTab (role unchanged)"]
+        H1["scan start\n(identifiers known)"]
+        H2["post-CopyScanResults hooks\n(~:1888-1902, :10162 - results at stable path)"]
+    end
+    BA2["BusAdapter.Publish\n(≤1 ms facade)"]
+    OLD["ToolApiPublisher - :5005\n(LEGACY - dual-run P1a,\nretired P1b)"]
+    BUS2[["Bus"]]
+
+    H1 -->|"scan.announced\n(NO file paths)"| BA2
+    H2 -->|"scan.committed\n(ResultsPath - stable)"| BA2
+    H2 -.->|"shadow compare during P1a"| OLD
+    BA2 --> BUS2
+```
+
+The early/late results race is closed **structurally**: `scan.announced` carries identifiers only (a mis-wired consumer has no path to read half-copied files); `scan.committed` fires only after the copy to the stable path — the same ordering today's gateway push relies on, now enforced by the payload contract.
 
 ```csharp
 // frmScanTab — post-CopyScanResults hook (the real sites: ~:1888-1902, :10162).

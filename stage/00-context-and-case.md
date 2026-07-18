@@ -1,6 +1,8 @@
 # 0 — Context & Case: Today's Architecture and Why We Change It
 
-> Level: **decision**. What exists today (verified in the codebase), what it costs, what the migration buys, and what it costs to do — the condensed business case. Next: [01-system-architecture.md](01-system-architecture.md).
+> Level: **decision**. What exists today (verified in the codebase), what it costs, what the migration buys, and what it costs to do — the condensed business case.
+> Up-link: folder index → [README.md](README.md).
+> Down-link: system architecture → [01-system-architecture.md](01-system-architecture.md).
 
 ---
 

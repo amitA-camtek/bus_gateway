@@ -1,6 +1,7 @@
 # Stage Design Set — Adversarial Architecture Review Record
 
 > **Target:** `stage\` (8 design docs + 17 codeSnippets) — Falcon Tool Fabric.
+> **Up-link:** folder index → [README.md](README.md). Decisions from this record → [stage-decision-briefs.md](stage-decision-briefs.md). Status in design docs → [05-roadmap-and-risks.md §5.6.1](05-roadmap-and-risks.md).
 > **Codebase verified against:** `C:\CamtekGit\BIS\Sources` (read-only).
 > **Method:** 9 parallel adversarial reviewers, one per dimension. Three dimensions (**security, data-integrity, test-strategy**) were never covered in the design's prior four review cycles.
 > **Reviewers & verdicts (round 1):** consistency **NOT-READY** · feasibility **NOT-READY (conditional)** · concurrency **NOT-READY** · security **NOT-READY** · data-integrity **NOT-READY** · operations **NOT-READY** · connectivity **NOT-READY** · load **NOT-READY** · test-strategy **NOT-READY**.

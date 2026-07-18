@@ -19,15 +19,27 @@ camtek\
 └── 05-reference\        ← pre-existing docs describing TODAY's system
 ```
 
-**`stage\`** ([stage/README.md](stage/README.md)) is the hierarchically-ordered package derived from `01-proposal\`: [1 system architecture](stage/01-system-architecture.md) → [2 AOI drill-down with component designs + code snippets](stage/02-aoi-architecture.md) → [3 four-lanes appendix (per-lane complete designs)](stage/03-appendix-four-lanes.md) → [4 impact analysis (projects to modify)](stage/04-impact-analysis.md). Each fact appears in exactly one stage doc; `01-proposal\` remains normative for full detail (risk registers, TestKit, wire protocol, roadmap gates).
+**`stage\`** ([stage/README.md](stage/README.md)) is the hierarchically-ordered package derived from `01-proposal\`: [executive summary](stage/executive-summary.md) (leadership/approval) → [0 context and case](stage/00-context-and-case.md) → [1 system architecture](stage/01-system-architecture.md) → [2 AOI drill-down with component designs + code snippets](stage/02-aoi-architecture.md) → [3 four-lanes appendix (per-lane complete designs)](stage/03-appendix-four-lanes.md) → [4 impact analysis (projects to modify)](stage/04-impact-analysis.md). Each fact appears in exactly one stage doc; `01-proposal\` remains normative for full detail (risk registers, TestKit, wire protocol, roadmap gates).
+
+**`tool-gateway-unification\`** ([tool-gateway-unification/README.md](tool-gateway-unification/README.md)) is the near-term, bus-independent design for unifying ToolManager and ToolGateway into one external-facing component: [executive summary](tool-gateway-unification/executive-summary.md) (leadership/approval) → [0 problem](tool-gateway-unification/00-problem-and-current-state.md) → [1 alternatives](tool-gateway-unification/01-alternatives.md) → [2 recommendation](tool-gateway-unification/02-recommendation.md) → complete designs [Alt 1](tool-gateway-unification/03-alt1-complete-design.md) / [Alt 3](tool-gateway-unification/05-alt3-complete-design.md) with their review records.
 
 ## Recommended reading order
 
-1. [executive-summary.md](01-proposal/executive-summary.md) — start here (leadership)
-2. [camtek-tool-fabric-complete-design.md](01-proposal/camtek-tool-fabric-complete-design.md) — the system design
-3. [aoi-main-complete-communication-design.md](01-proposal/aoi-main-complete-communication-design.md) — the AOI_Main design
-4. [camtek-messaging-bus-design.md](01-proposal/camtek-messaging-bus-design.md) + [camtek-toolhost-design.md](01-proposal/camtek-toolhost-design.md) — implementer deep-dives
-5. Review records ([02-reviews\](02-reviews/)) — the audit trail (as needed)
+**Using the `stage\` set (preferred — self-contained, DESIGN READY):**
+
+1. [stage/executive-summary.md](stage/executive-summary.md) — start here (leadership / approval)
+2. [stage/00-context-and-case.md](stage/00-context-and-case.md) — verified baseline + business case (technical)
+3. [stage/01-system-architecture.md](stage/01-system-architecture.md) → [stage/02-aoi-architecture.md](stage/02-aoi-architecture.md) — system and AOI designs
+4. [stage/05-roadmap-and-risks.md](stage/05-roadmap-and-risks.md) — wave plan, live bugs, governance
+5. [stage/stage-review.md](stage/stage-review.md) — review record (as needed)
+
+**Using the full `01-proposal\` set (for deep implementer detail):**
+
+1. [01-proposal/executive-summary.md](01-proposal/executive-summary.md) — leadership overview
+2. [01-proposal/camtek-tool-fabric-complete-design.md](01-proposal/camtek-tool-fabric-complete-design.md) — system design
+3. [01-proposal/aoi-main-complete-communication-design.md](01-proposal/aoi-main-complete-communication-design.md) — AOI_Main design
+4. [01-proposal/camtek-messaging-bus-design.md](01-proposal/camtek-messaging-bus-design.md) + [01-proposal/camtek-toolhost-design.md](01-proposal/camtek-toolhost-design.md) — implementer deep-dives
+5. Review records ([02-reviews/](02-reviews/)) — the audit trail (as needed)
 
 ---
 

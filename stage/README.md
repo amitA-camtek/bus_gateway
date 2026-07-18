@@ -10,20 +10,30 @@
 
 | # | Document | Level | Contents |
 |---|---|---|---|
+| — | [executive-summary.md](executive-summary.md) | **Leadership** | Business case, what the migration buys, costs/trade-offs, design confidence (5 review cycles), recommendation — for CTO / architects / management |
 | 0 | [00-context-and-case.md](00-context-and-case.md) | **Decision** | Today's architecture (verified baseline + the seven pain points), what the migration buys, costs/trade-offs, recommendation |
 | 1 | [01-system-architecture.md](01-system-architecture.md) | **System** | Context / process / component views, system communication flows, complete design of each **system-level new component** (bus broker, ToolConnect gateway, ToolHost, GEM shim) with block diagrams + flows, cross-cutting contracts |
 | 2 | [02-aoi-architecture.md](02-aoi-architecture.md) | **Process (AOI_Main)** | Drill-down into the hub: current vs target internals, complete design of each **AOI-level new component** with block diagrams + flows + **code snippets of the critical sections**, and the **complete link-disposition table** (§2.9 — every one of the ~21 links → lane) |
 | 3 | [03-appendix-four-lanes.md](03-appendix-four-lanes.md) | **Method** | The four migration lanes (BUS / SVC / CONS / KEEP) — per lane: complete design, block diagram, migration flow, code snippet of the lane's key mechanism |
 | 4 | [04-impact-analysis.md](04-impact-analysis.md) | **Projects** | What is created, modified, and retired — per repo project (`C:\CamtekGit\BIS\Sources\...`), per phase, with blast radius |
 | 5 | [05-roadmap-and-risks.md](05-roadmap-and-risks.md) | **Program** | Wave plan + per-edge gate, rollback/fleet-configuration governance, degraded-operation rules, consolidated risks, open questions, and the **five live bugs** found in shipped code |
-| 6 | [06-bus-implementation.md](06-bus-implementation.md) | **Implementation** | The complete bus build spec: projects, API, envelope, wire protocol, journal mechanics, broker algorithms, request/reply, security, load model, and the 14-group test kit |
+| 6 | [06-bus-implementation.md](06-bus-implementation.md) | **Implementation** | The complete bus build spec: projects, API, envelope, wire protocol, journal mechanics, broker algorithms, request/reply, security, load model, and the 14-group test kit (incl. class diagrams for the client library, broker, and TestKit) |
+| 7 | [07-toolconnect-design.md](07-toolconnect-design.md) | **Implementation** | The complete ToolConnect gateway build spec: internal architecture, class design, the WAL entry state machine (R-3/R-4), BusSource intake contract, CommandPublisher :5007 pipeline, CMM proxy, threading model, failure matrix, exists-vs-built map |
+
+## Supporting documents
+
+| Document | Contents |
+|---|---|
+| [stage-review.md](stage-review.md) | 5th-cycle adversarial review record: 9 reviewers, B1–B3 bucket classification, all CRITICAL/MAJOR findings and their resolutions, round-2 DESIGN READY verdict |
+| [stage-decision-briefs.md](stage-decision-briefs.md) | Decision briefs for every fork resolved in the 5th cycle (R-1..R-8, R-OPS-1..6, R-TS-1..3) |
+| [codeSnippets/](codeSnippets/) | 16 design-level C# sketches — see `00-README.md` for known sketch bugs (S-1..S-18); prose is normative where they diverge |
 
 ## Audience map
 
-- **Management / approval:** doc 0 (+ doc 5 §5.1–5.2 for the plan).
-- **Architecture review:** docs 0 → 1 → 2 → 3.
+- **Management / approval:** [executive-summary.md](executive-summary.md) → doc 5 §5.1–5.2 (the plan).
+- **Architecture review:** docs 0 → 1 → 2 → 3 → [stage-review.md](stage-review.md).
 - **Program / PM:** docs 4 + 5.
-- **Implementers:** docs 1–2 for orientation, 3 for the method, 6 to build the bus, 4 for the project map.
+- **Implementers:** docs 1–2 for orientation, 3 for the method, 6 to build the bus, 7 to build the gateway, 4 for the project map.
 
 ## No-duplication rules of this set
 
@@ -34,3 +44,4 @@
 - Project/file impact: **only** doc 4.
 - Waves, gates, governance, risks, open items, live bugs: **only** doc 5.
 - Bus wire/journal/broker/test detail: **only** doc 6.
+- ToolConnect gateway internals (WAL state machine, :5007 pipeline, CMM proxy): **only** doc 7 (doc 1 §1.3.2 keeps the system-altitude view; doc 6 §6.5 keeps the bus-side contract).

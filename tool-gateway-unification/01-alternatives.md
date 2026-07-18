@@ -1,6 +1,8 @@
 # 1 — Three Alternative Designs
 
-> All three achieve "one tool gateway" in the current architecture (no bus). They differ in **how much moves**: Alt 1 unifies the *surface*, Alt 2 unifies the *process*, Alt 3 unifies into a *service*. Scored against the six success criteria in [00-problem-and-current-state.md §0.4](00-problem-and-current-state.md).
+> Level: **alternatives**. Three designs — how much moves: Alt 1 unifies the *surface*, Alt 2 unifies the *process*, Alt 3 unifies into a *service*. Scored against the six success criteria in [00-problem-and-current-state.md §0.4](00-problem-and-current-state.md).
+> Up-link: problem definition → [00-problem-and-current-state.md](00-problem-and-current-state.md).
+> Down-links: comparison & recommendation → [02-recommendation.md](02-recommendation.md) · Alt 1 complete design → [03-alt1-complete-design.md](03-alt1-complete-design.md) · Alt 3 complete design → [05-alt3-complete-design.md](05-alt3-complete-design.md).
 
 ---
 

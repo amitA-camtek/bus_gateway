@@ -1,6 +1,7 @@
 # Stage Design Set — B3 Decision Briefs
 
-> **STATUS: recommendations ACCEPTED and written into the design (design READY).** Every "Recommendation: A" below was taken; where a resolution had leaned on an external input the design was strengthened so it no longer does (gateway-side idempotency R-3, GEM transition ring R-6, decided mTLS R-7, code-verified R-8). This document is retained as the *decision record* — the rationale and the options considered. Live status per gap: [05 §5.6.1](05-roadmap-and-risks.md); verdict: [stage-review.md](stage-review.md).
+> **STATUS: recommendations ACCEPTED and written into the design (design READY).** Every "Recommendation: A" below was taken; where a resolution had leaned on an external input the design was strengthened so it no longer does (gateway-side idempotency R-3, GEM transition ring R-6, decided mTLS R-7, code-verified R-8). This document is retained as the *decision record* — the rationale and the options considered.
+> **Up-link:** folder index → [README.md](README.md) · review record → [stage-review.md](stage-review.md). Live status per gap: [05-roadmap-and-risks.md §5.6.1](05-roadmap-and-risks.md).
 
 > **Purpose:** turn the 5th-cycle review's design-decision gaps ([stage-review.md](stage-review.md) R-1..R-8 + OPS/TS) into ratifiable decisions. One brief per gap: problem → options with trade-offs → recommendation → owner. This is a **decision agenda**, not new prose for the normative docs — a chosen option becomes normative text in a follow-up.
 > **How to use:** in the owner meeting, each brief resolves to *Accept-recommendation* / *Choose-alternative* / *Spike-first*. The five P1a-blocking briefs (R-1, R-2, R-3, R-7, R-8) gate the ADR-adoption decision in [doc 0](00-context-and-case.md).

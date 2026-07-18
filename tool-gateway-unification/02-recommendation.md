@@ -1,5 +1,11 @@
 # 2 — Comparison & Recommendation
 
+> Level: **decision**. Scored comparison of the three alternatives and the recommended path.
+> Up-link: alternatives → [01-alternatives.md](01-alternatives.md).
+> Down-links: Alt 1 complete design → [03-alt1-complete-design.md](03-alt1-complete-design.md) · Alt 3 complete design → [05-alt3-complete-design.md](05-alt3-complete-design.md).
+
+---
+
 ## 2.1 Scored against the six success criteria
 
 (Criteria from [00-problem-and-current-state.md §0.4](00-problem-and-current-state.md).)

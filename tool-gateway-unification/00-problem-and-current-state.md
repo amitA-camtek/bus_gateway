@@ -1,5 +1,11 @@
 # 0 — Problem & Current State
 
+> Level: **problem definition**. What "unify" means here, today's two components (verified in the codebase), and the success criteria.
+> Up-link: folder index → [README.md](README.md).
+> Down-link: the three alternative designs → [01-alternatives.md](01-alternatives.md).
+
+---
+
 ## 0.1 What "unify to one tool gateway" means here
 
 The request: in the current architecture, fix the split between **ToolManagement** and **ToolGateway** so the tool has **one tool gateway** rather than two disconnected external-facing components.

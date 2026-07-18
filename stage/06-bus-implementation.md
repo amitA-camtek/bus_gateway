@@ -111,7 +111,114 @@ pump reader:           E2E_ACK ──► enqueue Acked(seq) to journal thread �
 - **Dispatcher duties:** seq-contiguity dedup per **(source, sourceEpoch, topic)** (R-2) — O(1), immune to replay-burst size (`messageId` LRU only as the R-R secondary net); a higher epoch resets the baseline (alarmed); two-stage Ttl gates on a **monotonic clock**; catch boundary (a handler exception never kills the process); poison → dead-letter file after N attempts + alarm; reply cache = atomic insert-or-get of an in-progress placeholder (concurrent redelivery awaits the same completion — no double execution); late REPLYs counted, never a fault.
 - **Storm control** (topic-contract, in the library): error-class telemetry coalesced by `(source, errorCode)` window (first immediate, summaries every 10 s) + token bucket (10/s sustained, 100 burst).
 
+### Class design — public API + client internals
+
+(Realized in [codeSnippets/](codeSnippets/) 01–03; contracts §6.2, internals as above.)
+
+```mermaid
+classDiagram
+    class IBus {
+        <<interface>>
+        +Publish~T~(topic, payload, options) : ≤1 ms always
+        +Subscribe~T~(topic, handler, options) ISubscription
+        +RequestAsync~T~(topic, payload, ttl, ct) Task~Reply~
+        +Serve~T~(topic, handler) ISubscription
+        +Health BusHealth
+        +Counters IBusCounters
+    }
+    class BusFactory {
+        <<static>>
+        +Connect(sourceName, config) IBus : NON-blocking, background retry
+    }
+    class Topic {
+        +string Name
+        +DurabilityClass DurabilityClass
+        +Type PayloadType
+        +Acl Publishers
+        +StormControl StormControl
+    }
+    class DurabilityClass {
+        <<enumeration>>
+        A
+        AErrorsOnly
+        B
+        C
+        RR
+    }
+    class BusEnvelope {
+        +string MessageId
+        +string Topic
+        +string CorrelationId
+        +string Source : from HELLO, display only
+        +long SourceEpoch : publisher incarnation (R-2)
+        +long Seq : per-(source,epoch) monotonic
+        +int SchemaVersion : additive-only
+        +long? TtlMs
+        +int Attempts
+        +object Payload
+    }
+    class BusClient {
+        -PrioritySendQueue _sendQueue : REQ/REPLY over A over B/C, weighted
+        -OrderedDispatchLane _dispatch : per-(source,topic) FIFO (S-3)
+        -journal-writer thread : single writer, group-commit
+        +Health BusHealth
+        +Dispose()
+    }
+    class PrioritySendQueue {
+        +EnqueueReqReply(frame)
+        +EnqueueA(frame)
+        +EnqueueBC(frame)
+        +Dequeue(ct) PipeFrame : weighted, never starves B/C (S-14)
+    }
+    class OrderedDispatchLane {
+        +Post(work) : handlers awaited sequentially per lane
+    }
+    class Subscription~T~ {
+        +Topic Topic
+        +Dispose()
+    }
+    class ServeSubscription~T~ {
+        reply cache : insert-or-get, single execution
+    }
+    class ReplyWaiter {
+        +Task~Reply~ Task
+        +Complete(reply)
+    }
+    class BusCounters {
+        +Published(topic) long
+        +Acked(topic) long
+        +Delivered(topic) long
+        +Dropped(topic) long
+        +DeadLettered(topic) long
+        +Refused(topic) long
+    }
+    class SourceEpoch {
+        <<static>>
+        persisted next to journal - new epoch alarmed
+    }
+    class MonotonicClock {
+        <<static>>
+        +Now DateTime : Stopwatch anchor (S-4)
+    }
+
+    IBus <|.. BusClient
+    BusFactory ..> BusClient : creates
+    BusClient --> PrioritySendQueue
+    BusClient --> OrderedDispatchLane
+    BusClient "1" *-- "n" Subscription~T~
+    BusClient "1" *-- "n" ServeSubscription~T~
+    BusClient --> ReplyWaiter : per in-flight REQ
+    BusClient --> BusCounters
+    BusClient ..> SourceEpoch
+    BusClient ..> MonotonicClock
+    BusClient ..> BusEnvelope : wraps payloads
+    BusEnvelope ..> Topic
+    Topic --> DurabilityClass
+```
+
 ### Gateway WAL lifecycle (resolves R-3, R-4)
+
+> The gateway's complete component design — internal architecture, class design, WAL state diagram, CommandPublisher/CMM proxy, threading, failure matrix — is **[07-toolconnect-design.md](07-toolconnect-design.md)**. This subsection keeps the *bus-side contract* the gateway must honor.
 
 The gateway's `BusSource` is the class-A subscriber; its WAL is the message's durable owner between the bus and the external sinks.
 
@@ -130,6 +237,77 @@ The gateway's `BusSource` is the class-A subscriber; its WAL is the message's du
 - **Class-C**: drop-oldest + counted; drop counters alarmed.
 - **Heartbeat/health:** PING priority-dequeued; loop-lag self-check via a pipe-frame probe (a new ToolHost probe type); counters **pushed** to ToolHost each heartbeat (survive broker death).
 - **Supervision:** ToolHost child, `startOrder: 0`, `quarantine: never`, `priorityClass: AboveNormal`; broker updates are maintenance-window-only.
+
+### Class design — broker internals
+
+(Realized in [codeSnippets/04-broker.cs](codeSnippets/04-broker.cs) — the prose above is normative where the sketch diverges, per S-6/S-7/S-12.)
+
+```mermaid
+classDiagram
+    class BrokerHost {
+        +Run() : net8, ToolHost child, startOrder 0
+    }
+    class ConnectionManager {
+        -Dictionary~string,ClientConnection~ _connections
+        +OnHello(conn) : OS-account identity, epoch supersede (S-12)
+        +OnDisconnect(conn) : instance-compared removal
+    }
+    class ClientConnection {
+        +string Source : display label
+        +string OsAccount : the ACL key (R-7)
+        +long SourceEpoch
+        -PrioritySendQueue _outQueue
+        -writer task : write deadline, disconnect on stall
+        +Enqueue(frame) bool
+        +SendGoodbyeSuperseded()
+    }
+    class TopicRouter {
+        +Route(envelope, sender) : ACL check first, default-deny
+        +DeliverRetainedOnSubscribe(conn, topic)
+        +OnDisconnect(source, conn) : purge routing, keep durable sets
+    }
+    class TopicRegistry {
+        <<static>>
+        class + publish-ACL + durable subscribers per topic (R-1)
+    }
+    class BoundedQueue~T~ {
+        class A : 128, full = NACK, drain = RESUME
+        +TryEnqueue(item) bool
+        +TryDequeue(out item) bool
+    }
+    class DropOldestQueue~T~ {
+        class C : counted drops
+    }
+    class RetainedSlot {
+        class B : keyed (topic,key), locked
+        +Update(envelope) : coalesce, seq-max wins
+        +TryConsume(out envelope) : dequeue-marks-consumed (S-7)
+        sourceConnected + retainedAtUtc attached on serve (R-5)
+    }
+    class PrioritySendQueue {
+        lanes REQ/REPLY over A over B/C
+        +Dequeue(ct) RouterFrame
+    }
+    class RouterFrame {
+        +SendLane Lane
+        +BusEnvelope Envelope
+    }
+    class HealthReporter {
+        PING priority-dequeued - loop-lag measured -
+        counters pushed to ToolHost each heartbeat
+    }
+
+    BrokerHost --> ConnectionManager
+    BrokerHost --> TopicRouter
+    BrokerHost --> HealthReporter
+    ConnectionManager "1" *-- "n" ClientConnection
+    ClientConnection --> PrioritySendQueue
+    PrioritySendQueue ..> RouterFrame
+    TopicRouter --> TopicRegistry
+    TopicRouter --> BoundedQueue~T~ : class A per (topic,subscriber)
+    TopicRouter --> DropOldestQueue~T~ : class C
+    TopicRouter --> RetainedSlot : class B per (topic,key)
+```
 
 ## 6.7 Request/reply protocol (commands)
 
@@ -189,3 +367,43 @@ Derived: broker class-A queue 128; journal 100k/256 MB (alarm 50%); gateway chan
 | 14 | Load: **T-L1** soak 100 msg/s × 8 h (flat memory/journal) · **T-L2** burst 1000/1 s drained < 30 s · **T-L3** storm 1 kHz × 60 s → downstream ≤ 10/s, bound held · **T-L4** 1-h outage backlog drains < 10 min without restart · **T-L5** disk co-load · **T-L6** herd: 100 gateways register+drain with jitter, Fleet responsive |
 
 The composite scenarios (5, 11–14) exist because every reviewed failure lived in **hand-offs under concurrency** while component-isolated tests passed.
+
+### TestKit component design (`Camtek.Messaging.TestKit`)
+
+**Responsibility:** the shipped instruments that make the 14 assertions *writable by every migrating team* — a consumer test needs a fake bus, fault injection, and capture/assertion helpers, not a live broker. Targets `net48;net8.0`, both bitnesses (R-TS-1) — the net48 build is the one AOI actually loads.
+
+```mermaid
+classDiagram
+    class BusHarness {
+        +IBus Bus : in-proc fake, full IBus contract
+        +InjectBrokerDown()
+        +InjectBrokerHang() : pipe open, no progress
+        +InjectDiskDelay(ms) : group-commit co-load (assertion 1)
+        +InjectSlowSubscriber(topic, delay)
+        +InjectSuspendedSubscriber(topic)
+        +CrashPublisher() : journal survives, epoch increments
+        +Restart() : replay semantics under test
+        +AdvanceClock(t) : virtual monotonic time for Ttl gates
+    }
+    class TopicCaptor~T~ {
+        +Received IReadOnlyList~BusMessage~T~~
+        +AwaitCount(n, timeout) Task
+        +AssertPerSourceFifo()
+        +AssertNoDuplicateSideEffects()
+        +AssertDroppedCounted()
+    }
+    class ReplyStub {
+        +RespondWith(reply)
+        +RespondAfter(delay, reply) : expiry tests (assertion 7)
+        +NeverRespond() : requester-deadline tests
+    }
+    class FaultScript {
+        +At(step, fault) : composable crash-point matrix
+        +Run(scenario) : assertions 5, 11-14 composites
+    }
+    BusHarness --> TopicCaptor~T~ : creates
+    BusHarness --> ReplyStub : creates
+    BusHarness --> FaultScript : drives
+```
+
+**Usage flow (a consumer contract test):** `BusHarness` up → subscribe the component under test → publish via the harness → inject the scripted fault at the scripted step → `TopicCaptor` asserts delivery/order/dedup/drop counters → harness restart → captor asserts replay semantics. The harness is also the fixture the assertion table runs against in CI (PR tier: 1–11 in-proc; nightly: 12–14 with a real broker process; P0: the T-L* load set — tier table per R-TS-2).

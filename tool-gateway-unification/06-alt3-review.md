@@ -1,6 +1,9 @@
 # 6 — Adversarial Review of Alternative 3 (Unified Tool Gateway Service)
 
-> Four-reviewer adversarial review of [05-alt3-complete-design.md](05-alt3-complete-design.md), grounded in `C:\CamtekGit\BIS\Sources` (findings cite `file:line`). Dimensions: **feasibility · consistency · operations · security**. Protocol: fan-out → consolidate → fix → verify, looping until clean (per `.claude/commands/adversarial-arch-review.md`).
+> Level: **review record** — adversarial review of Alternative 3.
+> Up-link: design reviewed → [05-alt3-complete-design.md](05-alt3-complete-design.md).
+>
+> Four-reviewer adversarial review grounded in `C:\CamtekGit\BIS\Sources` (findings cite `file:line`). Dimensions: **feasibility · consistency · operations · security**. Protocol: fan-out → consolidate → fix → verify, looping until clean.
 > **Round-1 verdict: NOT-READY (sharpen, not reject).** All four reviewers judged the *strategy* sound and the design unusually honest, but converged on one root fact the Rev-1 design under-framed — **the control unit cannot be a Session-0 boot service** — plus a network→control coupling that was asserted rather than enforced. Rev 2 of `05` resolves these. See §"Round 2" and §"Final verdict".
 
 ---

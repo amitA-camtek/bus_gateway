@@ -21,7 +21,7 @@
 | [09-toolmanager-producer.cs](09-toolmanager-producer.cs) | `ToolEvents.cs` dual-publish + `stateSeq` lock | net48 | §03-lanes Lane-A P3, §04 §4.2 |
 | [10-frm-scan-tab-publish.cs](10-frm-scan-tab-publish.cs) | `frmScanTab` publish hooks + `clsInitAOI` startup | net48 | §2.6, §2.7 |
 | [11-external-control-p4.cs](11-external-control-p4.cs) | `ExternalControlCbUiWrapper` in-proc dispatch + compensation | net48 | §03-lanes Lane-D, §04 P4 |
-| [12-gateway-additions.cs](12-gateway-additions.cs) | Gateway `BusSource` + `CommandPublisher` + spool fixes | net8 | §1.3.2, §05 LB1/LB2/LB5 |
+| [12-gateway-additions.cs](12-gateway-additions.cs) | Gateway `BusSource` + `CommandPublisher` + spool fixes | net8 | §1.3.2, **07-toolconnect-design.md** (normative for internals), §05 LB1/LB2/LB5 |
 | [13-gem-shim.cs](13-gem-shim.cs) | GEM bus shim + degraded contract | net48 | §1.3.4 |
 | [14-toolhost.cs](14-toolhost.cs) | `Camtek.ToolHost` supervisor + health API | net8 | §1.3.3 |
 | [15-lane-c-absorption.cs](15-lane-c-absorption.cs) | Lane C: RobotUI absorption seam + event bridge | net48 | §03-lanes Lane-C |

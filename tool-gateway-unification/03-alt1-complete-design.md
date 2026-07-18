@@ -1,6 +1,10 @@
 # 3 — Alternative 1: Unified Gateway Facade — Complete Design
 
-> The detailed design for [Alternative 1](01-alternatives.md). Current architecture, **no bus**. Makes ToolGateway the tool's **single non-host external surface** (reporting + read-only status) with a **single, supervised, hardened lifecycle**, while the control plane (ToolManager/ProductionManager/GEM) stays exactly where it is.
+> Level: **complete design** — Alternative 1 (Unified Gateway Facade), Revision 2 post-review. Current architecture, **no bus**.
+> Up-link: alternatives overview → [01-alternatives.md](01-alternatives.md) · recommendation → [02-recommendation.md](02-recommendation.md).
+> Down-link: adversarial review record → [04-alt1-review.md](04-alt1-review.md).
+>
+> Makes ToolGateway the tool's **single non-host external surface** (reporting + read-only status) with a **single, supervised, hardened lifecycle**, while the control plane (ToolManager/ProductionManager/GEM) stays exactly where it is.
 > **Revision 2 (2026-07-18):** rewritten after the four-reviewer adversarial review ([04-alt1-review.md](04-alt1-review.md)). Changes: the **"two doors" framing** replaces the "single surface" overclaim (the host keeps the GEM wire); **external command relay ("CommandIntake") is removed** — a control entry point cannot be safely authorized inside a network-facing facade; the COM adapter becomes a **separate least-privilege net48 shim** (security boundary + the pragmatic answer to the net7↔net48 cross-process marshaling risk), **read-only**; and the spool drain/overflow fixes plus the AOI process-sweep collision are now hard **U0 prerequisites**.
 > Grounding: verified component facts in [00-problem-and-current-state.md](00-problem-and-current-state.md); reviewer findings cite `file:line`. Mermaid: sequence notes use `<br/>` for line breaks; no bare `<`, `;`, or literal newlines in messages/notes (verified).
 

@@ -1,6 +1,9 @@
 # 4 — Alt 1 Design Review Record
 
-> Adversarial review of [03-alt1-complete-design.md](03-alt1-complete-design.md), four reviewers (feasibility, consistency, operations, security), all grounded in `C:\CamtekGit\BIS\Sources` with `file:line` evidence.
+> Level: **review record** — adversarial review of Alternative 1.
+> Up-link: design reviewed → [03-alt1-complete-design.md](03-alt1-complete-design.md).
+>
+> Four reviewers (feasibility, consistency, operations, security), all grounded in `C:\CamtekGit\BIS\Sources` with `file:line` evidence.
 > **Unanimous verdict: NOT-READY — but the strategy is sound.** All four agree the lifecycle-promotion (G2) and reporting-single-surface (G1) reasoning is correct; the problems concentrate in three places: the **§3.6 COM adapter** (mechanism wrong + a security escalation path), the **CommandIntake / status surface** (unauthenticatable + info-disclosure), and the **spool drain** (broken in exactly the way the always-on service amplifies).
 > Round 1: 2026-07-18.
 

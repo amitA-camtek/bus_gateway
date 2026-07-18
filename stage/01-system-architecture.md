@@ -226,6 +226,8 @@ flowchart LR
 
 **Flow — outage recovery:** sink down → messages sit in the WAL spool (DELIVER_ACK already sent on WAL append — **not** gated on sink routing, R-4) → periodic drain retries at a capped rate, oldest-first, interleaved with live traffic → a one-hour outage drains in <10 min without any restart. Each WAL entry tracks **per-sink** completion (R-3), so a message delivered to Fleet but pending for TSMC is retried only to TSMC, never re-sent to Fleet. Dead-lettering happens only for *poison* (fails while the sink is connected). At WAL quota the gateway **withholds DELIVER_ACK** (backpressure to the alarmed publisher journal) rather than dropping — loss is never taken at the sink hop (R-4).
 
+**Complete internal design** (WAL entry state machine, class design, CommandPublisher pipeline, CMM proxy, threading model, failure matrix): **[07-toolconnect-design.md](07-toolconnect-design.md)** — this section is the system-altitude view only.
+
 ### 1.3.3 ToolHost supervisor
 
 **Responsibility:** the single Windows service (3 → 1); supervises the tool's headless children with job objects, per-child restart classes, and the tool's health/diagnostics surface.
@@ -246,6 +248,61 @@ flowchart TB
 ```
 
 **Flow — crash containment:** child exits → log + backoff restart → `maxPerHour` exceeded → *leaf* children quarantine (siblings unaffected); **broker/gateway never quarantine** (infinite max-backoff restarts + escalating alarm — a dark fabric costs more than a 2-minute retry). A killed ToolHost tears down all children via job objects — no orphans, ever.
+
+**Class design** (realized in [codeSnippets/14-toolhost.cs](codeSnippets/14-toolhost.cs)):
+
+```mermaid
+classDiagram
+    class ToolHostService {
+        +OnStart()
+        +OnStop() : graceful reverse-order drain (R-OPS-3)
+    }
+    class ProcessSupervisor {
+        -Dictionary~string,ChildProcess~ _children
+        +StartAll(manifest)
+        +StopAll() : reverse startOrder, per-child drain timeout
+        -OnChildExit(name) : backoff restart or quarantine
+    }
+    class ChildConfig {
+        +string Name
+        +string ExecutablePath
+        +int StartOrder
+        +bool QuarantineNever
+        +ProcessPriorityClass PriorityClass
+        +int MaxRestartsPerHour
+        +int MaxBackoffMs
+    }
+    class ChildProcess {
+        +ChildConfig Config
+        +Process Process
+        +bool IsRunning
+    }
+    class RestartWindow {
+        +RecordAndCountLastHour() int
+    }
+    class EndpointManifest {
+        +string Hash : SHA-256, in fleet fingerprint
+        +List~ChildConfig~ Children
+        +VerifySignature() : fail-closed (SEC-2)
+    }
+    class HealthAggregator {
+        +Serve() : http :5100
+        -per-child probes + bus counters mirror
+    }
+    class ToolHealthReport {
+        +DateTime Timestamp
+        +string ManifestHash
+        +List~ChildHealthEntry~ Children
+    }
+
+    ToolHostService --> ProcessSupervisor
+    ToolHostService --> HealthAggregator
+    ProcessSupervisor "1" *-- "n" ChildProcess
+    ChildProcess --> ChildConfig
+    ChildProcess --> RestartWindow
+    ProcessSupervisor --> EndpointManifest : verified at load
+    HealthAggregator --> ToolHealthReport
+```
 
 ### 1.3.4 GEM shim (inside `SecsGemObjects` / SecsGemGui.Net — plain C#)
 
@@ -277,6 +334,112 @@ flowchart LR
 **No missed E30 transitions (resolves the class-B gap, DI-8).** `tool.state` stays class-B/retained for the *current-state* consumers, but the GEM shim additionally subscribes to a small **bounded last-N transition ring** (the last N `tool.state` transitions, N ≈ 16) republished by ToolManager, so after a reconnect blip the shim replays the intermediate transitions — e.g. an `Engineering → EngineeringToProduction → Engineering` failure cycle — and reports every E30 CEID the host expects. This makes the design independent of a per-site "does the host need intermediate transitions?" answer: it always delivers them, so **no per-site host sign-off is required**. (`stateSeq` already lets the shim *detect* a gap; the ring lets it *recover* one.)
 
 **Standing (a normal P0 gate, not a design gap):** the Ttl margin `ttl + margin < E30` uses per-site E30 timeouts — a **P0 measurement of the same class the design already carries** (group-commit interval, single-instance ceilings, TsmcSink service time; §5.2 Wave 0). The shim **asserts `ttl + margin < E30` at config load and fails loudly** if a site's config violates it, so a bad number is caught at startup, never in production. The machine is fully specified; the numbers are measured at P0 like every other tool.
+
+**Class design** (realized in [codeSnippets/13-gem-shim.cs](codeSnippets/13-gem-shim.cs) — normative where the sketch diverges, per S-10/S-16):
+
+```mermaid
+classDiagram
+    class GemBusShim {
+        -IBus _bus
+        -ShimState _state : the 4-state HSMS x bus machine
+        -TransitionRing _ring
+        +HandleS2F41StartManualScan(correlationId, tx) GemCommandDisposition
+        -OnBusHandshakeCompleted() : REQ/PONG round-trip, not a flag read
+        -OnBusLost() : composite signal - to degraded + alarm CEID
+        -OnToolStateTransition(payload) : E30 CEID report
+        +Dispose()
+    }
+    class ShimState {
+        <<enumeration>>
+        DegradedNoBus : initial state
+        Normal
+        NoHost
+        BothDown
+    }
+    class TransitionRing {
+        -ToolStatePayload[] _lastN : N = 16, republished by ToolManager
+        +ReplayGap(fromSeq) : missed E30 transitions after reconnect (DI-8)
+    }
+    class GemCommandDisposition {
+        <<enumeration>>
+        HcackDenied : decided ON the reader thread, immediate
+        Pending : completed async off the reader thread
+    }
+    class GemControlState {
+        <<enumeration>>
+        OnlineRemote : host-granted only, never auto
+        OnlineLocal : degraded home state
+        Offline
+    }
+    class IGemSecsCallbacks {
+        <<interface>>
+        +CompleteTransaction(tx, hcack)
+        +RaiseAlarm(ceid)
+        +ReportEvent(ceid, payload)
+    }
+    class IGemTransaction {
+        <<interface>>
+        +string TransactionId
+        +TimeSpan E30Window
+    }
+    class TtlConfig {
+        +FromSiteE30(margin) TimeSpan
+        +AssertValidAtLoad() : fail loudly if ttl+margin >= E30
+    }
+
+    GemBusShim --> ShimState
+    GemBusShim --> TransitionRing
+    GemBusShim --> GemControlState
+    GemBusShim ..> IGemSecsCallbacks : replies async, never Wait on reader
+    GemBusShim ..> IGemTransaction
+    GemBusShim --> TtlConfig
+```
+
+### 1.3.5 ToolServices host (`Camtek.ToolServices.Host`, :5060)
+
+**Responsibility:** the **one** gRPC host for the service-shaped internals that Lane B migrates (SystemLogger pilot, then JobProvider/WafersDB/InspectionMng/Maintenance/Automation as census-gated modules) — never six processes. Host-side only; the mandatory *client* policy (deadline, breaker, fallback) is the consumer's contract ([02 §2.5](02-aoi-architecture.md)); the migration method is Lane B's ([03](03-appendix-four-lanes.md)).
+
+```mermaid
+flowchart LR
+    AOI2["AOI_Main ServiceClients\n(deadline + breaker + fallback)"]
+    subgraph TSH["Camtek.ToolServices.Host (net8, :5060, ToolHost child)"]
+        KES["Kestrel gRPC host\nloopback-bound, service-account ACL"]
+        REG["Module registry\none module = one Camtek.API contract"]
+        M1["SystemLogger module (pilot)"]
+        M2["JobProvider · WafersDB · ...\n(census-gated, one per release)"]
+        HP["Health probe\nper-module serving status"]
+    end
+    AOI2 -->|"gRPC :5060"| KES --> REG --> M1 & M2
+    HP -.-> TH2["ToolHost :5100"]
+```
+
+```mermaid
+classDiagram
+    class ToolServicesHost {
+        +Main() : GenericHost + Kestrel :5060
+        -RegisterModules(manifest)
+    }
+    class IServiceModule {
+        <<interface>>
+        +string Name
+        +MapGrpc(builder)
+        +HealthStatus Probe()
+    }
+    class SystemLoggerModule {
+        +MapGrpc(builder) : Camtek.API.SystemLogger
+        +Probe() HealthStatus
+    }
+    class ModuleRegistry {
+        -List~IServiceModule~ _modules
+        +MapAll(builder)
+        +ProbeAll() ToolServicesHealth
+    }
+    ToolServicesHost --> ModuleRegistry
+    ModuleRegistry "1" *-- "n" IServiceModule
+    IServiceModule <|.. SystemLoggerModule
+```
+
+**Flow — request:** consumer proxy (3 s deadline) → Kestrel → module → response; module down ≠ host down (per-module serving status); host down → consumer's breaker opens → per-service fallback (e.g. logging falls back to a local file — never blocks, never loses). **Contracts:** loopback-bound + service-account ACL (not externally reachable — external callers come only through ToolConnect); one `Camtek.API.*` contract per module, additive-only versioning; ToolHost child (normal quarantine class — a leaf, unlike broker/gateway); health probed per module into :5100. **Deliberately thin:** the host is Kestrel boilerplate by design — the per-service design weight lives in each module's contract + result-equivalence tests (Lane B gate), not in the host.
 
 ## 1.4 Cross-cutting contracts (summary — normative text in the proposal set)
 
