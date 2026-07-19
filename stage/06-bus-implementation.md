@@ -100,6 +100,8 @@ Frame cap **1 MB** — the bus carries *pointers* (paths / ids), never bulk data
 
 ## 6.4 Wire protocol
 
+**Topology scope: single-PC only.** All bus-relevant processes (AOI_Main, ToolManager, broker, gateway, GEM shim, ToolHost) run on the same physical machine. Cross-machine communication is gateway/gRPC territory, not bus territory; the bus makes no provision for multi-PC routing, and none is required. (A-1 answered — see [05-roadmap-and-risks.md §5.6](05-roadmap-and-risks.md).)
+
 Transport: one duplex Windows named pipe per process (`\\.\pipe\camtek.bus`), localhost only, **pipe-ACL authenticated** (identity per connection → per-topic publish ACLs for free). Framing: 4-byte length prefix + UTF-8 JSON.
 
 | Frame | Purpose |
