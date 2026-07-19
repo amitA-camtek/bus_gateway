@@ -27,7 +27,7 @@ If the target is missing, ask for it and stop. Do not invent a target.
 | **concurrency** | Deadlock, starvation, races, reentrancy, latency bounds, ordering, teardown |
 | **connectivity** | Every connection's lifecycle, outage behavior, reconnect, partial-connectivity states, endpoint config |
 | **load** | Load model, burst/storm behavior, buffer-sizing coherence, throughput ceilings, backpressure |
-| **security** | Threat model: authn/authz per surface, trust boundaries, credential/cert lifecycle, audit |
+| ~~**security**~~ | **EXCLUDED — never spawn a security reviewer.** Security-relevant observations that surface incidentally in other dimensions may still be recorded as findings |
 | **data-integrity** | Loss/duplication windows, provenance/traceability, ordering guarantees end to end |
 | **test-strategy** | Is the stated test coverage sufficient? Composite-fault scenarios, qualification of test tooling |
 
@@ -35,7 +35,7 @@ If the target is missing, ask for it and stop. Do not invent a target.
 
 1. **Orient.** Read the target doc(s) fully. Check codebase connectivity. Build a TodoWrite list. Do NOT start reviewing before reading.
 
-2. **Fan out — one reviewer agent per dimension, in parallel** (single message, multiple `Agent` calls). Each agent prompt must:
+2. **Fan out — one reviewer agent per dimension, in parallel** (single message, multiple `Agent` calls). **All reviewer agents run with `model: fable`.** Never include the security dimension in the fan-out (even if requested in the arguments — state that it was skipped). Each agent prompt must:
    - Name the dimension and its adversarial lens.
    - Point at the target doc(s) AND the codebase root — instruct it to **verify claims against real code with `file:line` evidence**, not to trust the doc.
    - Demand findings **ranked CRITICAL / MAJOR / MINOR**, each with: a concrete failure scenario (inputs/interleaving → wrong outcome), the doc section it applies to, and a **specific suggested fix**.
@@ -46,7 +46,7 @@ If the target is missing, ask for it and stop. Do not invent a target.
 
 4. **Fix.** Apply every critical/major resolution to the design doc(s). Keep companion docs consistent (if two docs cover one topic, one is normative, the other cross-references). Preserve a "superseded" banner on any historical doc rather than silently rewriting it.
 
-5. **Verify (new round).** Spawn a verification agent: confirm each recorded resolution actually landed, and hunt for NEW contradictions the fixes introduced. Fix what it finds.
+5. **Verify (new round).** Spawn a verification agent (`model: fable`): confirm each recorded resolution actually landed, and hunt for NEW contradictions the fixes introduced. Fix what it finds.
 
 6. **Iterate** steps 4–5 until the verifier returns no critical/major findings. Record the final verdict and any **standing conditions** (things only a human/experiment can close) in the review record.
 
