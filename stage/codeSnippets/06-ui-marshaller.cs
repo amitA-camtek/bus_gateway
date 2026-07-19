@@ -52,19 +52,28 @@ namespace Falcon.Net.Bus
                 return true;
             }
 
-            using (var done = new ManualResetEventSlim())
+            // Do NOT use `using` on ManualResetEventSlim here (C8-MAJ-5/C9-7): on the abandoned path
+            // (timeout / shutdown) the event would be disposed while the posted delegate is still queued;
+            // when the UI thread later runs it, `done.Set()` throws ObjectDisposedException on the pump.
+            // Exactly-one-side-disposes: caller disposes on the normal (waited) path; the posted delegate
+            // calls Set() only and lets GC collect the event on the abandoned path (GC-safe, no finalizer issue).
+            var done = new ManualResetEventSlim();
+            if (!TryPost(() => { try { work(); } finally { done.Set(); } }))
             {
-                if (!TryPost(() => { try { work(); } finally { done.Set(); } }))
-                    return false;
-                try
-                {
-                    // NOTE: TotalMilliseconds — NOT .Milliseconds (§05 LB4 fix)
-                    return done.Wait((int)timeout.TotalMilliseconds, _shutdown);
-                }
-                catch (OperationCanceledException)
-                {
-                    return false; // shutdown during the wait → abandoned, not an exception (S-8)
-                }
+                done.Dispose();
+                return false;
+            }
+            try
+            {
+                // NOTE: TotalMilliseconds — NOT .Milliseconds (§05 LB4 fix)
+                bool completed = done.Wait((int)timeout.TotalMilliseconds, _shutdown);
+                done.Dispose(); // caller disposes — the delegate already ran Set() before returning
+                return completed;
+            }
+            catch (OperationCanceledException)
+            {
+                // abandoned path: DO NOT dispose done here — delegate may still run Set() on the UI thread
+                return false;
             }
         }
 

@@ -62,10 +62,11 @@ classDiagram
         -UiMarshaller _ui
         -CommandSerializationGate _gate
         -ISimVvrGate _simVvr
-        -long _lastAppliedSeq : tool.state ordering (§2.4)
+        -long _lastEpoch : publisher epoch (M-9 - ToolManager restart detection)
+    -long _lastAppliedSeq : tool.state ordering — pair (epoch, seq) (§2.4)
         +RegisterSubscriptions()
         +FetchAndApplyToolStateSnapshot()
-        -OnToolStateEvent(e) : ApplyIfNewer(stateSeq)
+        -OnToolStateEvent(e) : ApplyIfNewer(epoch, stateSeq)
         -OnSnapshot(state, seq) : race-safe startup (§2.4)
         +Publish~T~(topic, payload) : facade, ≤1 ms
         +DispatchExternalCommand(cmd, requestId, ttl) : P4 in-proc path
@@ -88,6 +89,7 @@ classDiagram
     }
     class ToolStateEvent {
         +ToolStateEnum State
+        +long SourceEpoch : publisher incarnation counter (R-2 / M-9)
         +long StateSeq
     }
     class IGuiStateSink {
@@ -264,14 +266,21 @@ public sealed class UiMarshaller
     }
 
     // For the rare caller that needs a result: post + wait-with-REAL-timeout.
+    // IMPORTANT: do NOT use `using` here — the posted delegate may call done.Set()
+    // after the wait has been abandoned (timeout/cancel). An un-disposed
+    // ManualResetEventSlim with no kernel handle is GC-safe; disposing while the
+    // delegate is still queued causes ObjectDisposedException on the UI thread (C8-MAJ-5).
     public bool TryPostAndWait(Action work, TimeSpan timeout)
     {
-        using (var done = new ManualResetEventSlim())
+        var done = new ManualResetEventSlim();
+        if (!TryPost(() => { try { work(); } finally { done.Set(); } }))
         {
-            if (!TryPost(() => { try { work(); } finally { done.Set(); } }))
-                return false;
-            return done.Wait((int)timeout.TotalMilliseconds, _shutdown);
-        }   // caller decides what an abandoned wait means - never blocks forever
+            done.Dispose();
+            return false;
+        }
+        bool completed = done.Wait((int)timeout.TotalMilliseconds, _shutdown);
+        if (completed) done.Dispose();   // exactly one side disposes
+        return completed;               // caller decides what an abandoned wait means
     }
 
     // Run `work` as soon as the dispatcher handle exists; if it isn't ready yet
@@ -321,14 +330,18 @@ private bool _snapshotApplied;
 void OnToolStateEvent(ToolStateEvent e)         // marshalled, UI thread
 {
     if (!_snapshotApplied) { _preSnapshotBuffer.Add(e); return; }
-    ApplyIfNewer(e.State, e.StateSeq);
+    ApplyIfNewer(e.State, e.SourceEpoch, e.StateSeq);
 }
 
-void OnSnapshot(ToolState state, long seq)      // marshalled, UI thread
+void OnSnapshot(ToolState state, long epoch, long seq)  // marshalled, UI thread
 {
-    ApplyIfNewer(state, seq);
-    foreach (var e in _preSnapshotBuffer.OrderBy(x => x.StateSeq))
-        ApplyIfNewer(e.State, e.StateSeq);
+    ApplyIfNewer(state, epoch, seq);
+    // Sort by (epoch, seq): a ToolManager restart resets seq to 0 so a
+    // higher epoch is always newer regardless of its seq value (M-9/C8-CRIT-8).
+    foreach (var e in _preSnapshotBuffer
+                        .OrderBy(x => x.SourceEpoch)
+                        .ThenBy(x => x.StateSeq))
+        ApplyIfNewer(e.State, e.SourceEpoch, e.StateSeq);
     _preSnapshotBuffer.Clear();
     _snapshotApplied = true;
 }

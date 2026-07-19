@@ -35,13 +35,14 @@ namespace ToolManagement.SecsGemObjects
         private readonly ISubscription      _scanAnnouncedSub;
 
         // Degraded contract state. NOTE (review R-6/CN-3): the full contract is a FOUR-state
-        // HSMS×bus machine (HSMS up/down × bus up/down). This sketch models the two booleans the
-        // door actually gates on; the explicit 4-state machine is the R-6 design decision.
+        // HSMS×bus machine (HSMS up/down × bus up/down). This sketch collapses to two booleans
+        // but ALL ShimState transitions are serialized under _shimLock (one lock, §1.3.4 / note in class diagram).
         // START DEGRADED: _busAvailable begins FALSE and only a COMPLETED bus handshake promotes
         // it — never a single Health.IsConnected read at ctor time (which left _remoteGranted
         // permanently unreachable when the broker was already up at start, review S-10).
-        private volatile bool _busAvailable;    // false until HandshakeAsync completes
-        private volatile bool _remoteGranted;   // false until the HOST/operator grants REMOTE
+        private readonly object _shimLock = new object(); // serializes ALL ShimState transitions
+        private bool _busAvailable;             // false until PING round-trip to broker completes (§1.3.4)
+        private bool _remoteGranted;            // false until the HOST/operator grants REMOTE
         private Timer _healthTimer;             // FIELD, not a local — a local is GC-collected (S-10)
 
         public GemBusShim(IBus bus, IGemSecsCallbacks secsCallbacks)
@@ -69,16 +70,18 @@ namespace ToolManagement.SecsGemObjects
         {
             try
             {
-                // A real round-trip (REQ/PONG), not a Health flag read — proves the broker actually
-                // answers before we tell the host the tool is controllable.
-                var ok = await _bus.RequestAsync(Topics.ToolState,
-                    new ToolStatePayload(), TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                if (ok != null && ok.IsAccepted)
+                // Bus-up = broker PING round-trip to the BROKER (not a tool.state REQ — §1.3.4 / class diagram note).
+                // tool.state.replay availability is separately alarmed and does NOT gate this handshake.
+                bool pingOk = await _bus.PingAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                if (pingOk)
                 {
-                    _busAvailable = true;
-                    // Do NOT auto-grant REMOTE — E30 remote grant is host/operator-initiated. We only
-                    // move to "REMOTE grantable"; the host re-grants (removing the S-10 auto-promotion).
-                    _secsCallbacks.SetControlState(GemControlState.OnlineLocal);
+                    lock (_shimLock)
+                    {
+                        _busAvailable = true;
+                    }
+                    // RecoverFromDegraded: ONLINE-LOCAL + BusRecovered CEID. Do NOT auto-grant REMOTE —
+                    // E30 remote grant is host/operator-initiated (removing the S-10 auto-promotion).
+                    RecoverFromDegraded();
                 }
             }
             catch { /* stay degraded; the health monitor will retry on the next transition */ }
@@ -98,12 +101,14 @@ namespace ToolManagement.SecsGemObjects
         public GemCommandDisposition HandleS2F41StartManualScan(string correlationId,
                                                                 IGemTransaction tx)
         {
-            if (!_busAvailable)              // proven-down (handshake not completed / dropped)
+            bool busOk, remoteOk;
+            lock (_shimLock) { busOk = _busAvailable; remoteOk = _remoteGranted; }
+            if (!busOk)                      // proven-down (handshake not completed / dropped)
             {
                 ApplyDegradedContract();
-                return GemCommandDisposition.HcackDenied; // deliberate denial — never a timeout
+                return GemCommandDisposition.HcackDenied; // deliberate denial on reader thread — never a timeout
             }
-            if (!_remoteGranted)
+            if (!remoteOk)
                 return GemCommandDisposition.HcackDenied; // REMOTE not granted by host
 
             var ttl = TimeSpan.FromSeconds(TtlConfig.GemCommandTtlSeconds);
@@ -147,14 +152,15 @@ namespace ToolManagement.SecsGemObjects
 
         private void ApplyDegradedContract()
         {
-            // 1. Move host-visible control state to ONLINE-LOCAL (not a timeout — deliberate)
+            // All ShimState transitions serialized under _shimLock.
+            lock (_shimLock)
+            {
+                _busAvailable  = false;
+                _remoteGranted = false;
+            }
+            // SECS callbacks invoked OUTSIDE the lock — never call cross-process COM under a lock.
             _secsCallbacks.SetControlState(GemControlState.OnlineLocal);
-
-            // 2. Issue a CEID (Collection Event) alarm so the fab sees the transition
             _secsCallbacks.SendCollectionEvent(GemCollectionEvent.BusDegraded);
-
-            // 3. Refuse REMOTE grant until bus recovers
-            _remoteGranted = false;
         }
 
         private void RecoverFromDegraded()
@@ -162,9 +168,28 @@ namespace ToolManagement.SecsGemObjects
             // Bus reconnected — move to ONLINE-LOCAL and let the HOST re-grant REMOTE. Do NOT
             // auto-promote to ONLINE-REMOTE (review S-10/CN-3): E30 remote grant is host/operator-
             // initiated; auto-granting it is a compliance bug introduced by the reconnect path.
-            _remoteGranted = false;
+            lock (_shimLock)
+            {
+                _remoteGranted = false;
+            }
             _secsCallbacks.SetControlState(GemControlState.OnlineLocal);
+            _secsCallbacks.SendCollectionEvent(GemCollectionEvent.BusRecovered); // emit BusRecovered CEID (C9-4/M9-6)
             // Retained tool.state is re-reported AFTER the control-state restore, on this same thread.
+        }
+
+        // ── Host REMOTE grant entry point ─────────────────────────────────────────
+        // Called by the E30 host's remote-enable callback (ONLINE-REMOTE grant from operator).
+        // Only effective when bus is available — no REMOTE over a dark bus.
+        public void SetRemoteGranted(bool granted)
+        {
+            bool busOk;
+            lock (_shimLock)
+            {
+                busOk = _busAvailable;
+                _remoteGranted = granted && busOk; // REMOTE only grantable when bus is proven up
+            }
+            if (granted && !busOk)
+                ApplyDegradedContract(); // deny the grant; host will see ONLINE-LOCAL
         }
 
         // ── Host event reports from bus subscriptions ──────────────────────────────
@@ -199,14 +224,15 @@ namespace ToolManagement.SecsGemObjects
                 bool nowAvailable = _bus.Health.IsConnected
                                     && _bus.Health.HeartbeatAge < TimeSpan.FromSeconds(6)
                                     && _bus.Health.LoopLagMs < 500;
-                if (_busAvailable && !nowAvailable)
+                bool wasAvailable;
+                lock (_shimLock) { wasAvailable = _busAvailable; }
+                if (wasAvailable && !nowAvailable)
                 {
-                    _busAvailable = false;
                     ApplyDegradedContract();
                 }
-                else if (!_busAvailable && nowAvailable)
+                else if (!wasAvailable && nowAvailable)
                 {
-                    // Re-prove with a handshake before leaving degraded (not just a flag flip).
+                    // Re-prove with a PING handshake before leaving degraded (not just a flag flip).
                     _ = HandshakeThenEnableAsync();
                 }
             }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));

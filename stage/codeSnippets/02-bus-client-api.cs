@@ -84,10 +84,19 @@ namespace Camtek.Messaging
         ISubscription Subscribe<T>(Topic topic, Func<BusMessage<T>, Task> handler,
                                    SubscribeOptions options = null);
 
-        // Commands. Ttl mandatory; requester-side deadline mandatory (never wait bare).
+        // Commands — untyped reply (ACCEPTED/REJECTED + Reason, for gui.commands / tool.commands).
         Task<Reply> RequestAsync<T>(Topic topic, T payload, TimeSpan ttl,
                                     CancellationToken ct = default(CancellationToken));
         ISubscription Serve<T>(Topic topic, Func<BusMessage<T>, Task<Reply>> handler);
+
+        // Commands — typed reply (for R-R topics with structured response payloads, e.g. tool.state.replay).
+        // (C9-1) net48-compatible: explicit type parameters required at call sites in C# 7.3.
+        Task<TRes> RequestAsync<TReq, TRes>(Topic topic, TReq payload, TimeSpan ttl,
+                                            CancellationToken ct = default(CancellationToken));
+        ISubscription Serve<TReq, TRes>(Topic topic, Func<BusMessage<TReq>, Task<TRes>> handler);
+
+        // Broker liveness PING — priority-queued, proves broker answers not just socket open. (C9-3)
+        Task<bool> PingAsync(TimeSpan timeout);
 
         BusHealth    Health   { get; } // connected, heartbeat age, queue depths, journal backlog
         IBusCounters Counters { get; } // per-topic published/acked/delivered/dropped/dead-lettered

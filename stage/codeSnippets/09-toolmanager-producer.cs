@@ -12,6 +12,7 @@
 
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using Camtek.Messaging;
 using Camtek.Messaging.Contracts;
 
@@ -53,6 +54,14 @@ namespace ToolManagement.ToolManager.Server
             _comSink = comSink;
             _fanOut  = new FanOutWorker(FanOutOne);          // drains posted records in seq order
             _replayRing = new TransitionRing(16);            // N per the P0 transition-burst measurement
+
+            // Serve the tool.state.replay R-R topic so GemBusShim can request missed transitions.
+            // Uses typed Serve<TReq,TRes> (C9-1): request payload is the fromSeq (long);
+            // reply payload is StateTransition[] (the ring entries since that seq).
+            // TODO(X7-7): wire up when GemBusShim is built at P4.
+            if (_bus != null)
+                _bus.Serve<long, StateTransition[]>(Topics.ToolStateReplay,
+                    req => Task.FromResult(_replayRing.Since(req.Payload)));
         }
 
         // ── The commit sites ──────────────────────────────────────────────────────
@@ -91,11 +100,11 @@ namespace ToolManagement.ToolManager.Server
 
         // ── Also expose a synchronous snapshot read (used by BusAdapter.FetchAndApplyToolStateSnapshot) ──
 
-        public (ToolStateEnum State, long StateSeq) GetSnapshot()
+        public (ToolStateEnum State, long SourceEpoch, long StateSeq) GetSnapshot()
         {
             lock (_stateLock)
             {
-                return (_currentState, _stateSeq);
+                return (_currentState, _sourceEpoch, _stateSeq);
             }
         }
 
@@ -110,10 +119,11 @@ namespace ToolManagement.ToolManager.Server
             // ≤1 ms — lock-free enqueue; never on the transition lock (§6.2 Publish bound)
             _bus.Publish(Topics.ToolState, new ToolStatePayload
             {
-                State     = rec.NewState,
-                PrevState = rec.PrevState,   // edges are load-bearing for the E30 mapping (M-8)
-                StateSeq  = rec.Seq,         // ordered by (SourceEpoch, StateSeq) downstream (M-9)
-                Reason    = reason
+                State       = rec.NewState,
+                PrevState   = rec.PrevState,   // edges are load-bearing for the E30 mapping (M-8)
+                SourceEpoch = rec.Epoch,        // incarnation counter — dedup key (C8-CRIT-8/R-2/M-9)
+                StateSeq    = rec.Seq,          // ordered by (SourceEpoch, StateSeq) downstream
+                Reason      = reason
             });
         }
 

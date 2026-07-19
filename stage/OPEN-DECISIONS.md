@@ -70,12 +70,54 @@ Design-complete, but the design's guarantees depend on these measured values cle
 
 ---
 
+---
+
+## E. Cycle-8 decisions — new items from the 8th adversarial review cycle
+
+### D15 — SecsGemGui.Net session-0: split headless GEM engine from interactive operator UI
+- **Finding:** OPS8-1 (CRITICAL). SecsGemGui.Net is an interactive WinForms process (`[STAThread] Main()` → `Application.Run(new frmMain())`, confirmed `Program.cs:13-19`). Running it as a ToolHost child process (LocalSystem, session 0) puts the GEM operator UI — `frmSecsViewer`, `frmTerminalMsgNotification` — on an invisible desktop. A fab-host terminal message requiring operator acknowledgment would receive no response.
+- **Resolution needed:** Split SecsGemGui.Net into (a) a headless GEM engine process (ToolHost child, session 0) and (b) a separate interactive viewer/terminal-message UI that runs in the operator session. This is new design scope — unestimated. The headless engine must own all E30/HSMS/SECS protocol processing and the bus shim; the viewer is a display-only satellite.
+- **Owner:** GEM / product owner. **Blocks:** Wave 1 GEM entry.
+
+### D16 — :5100 management-NIC binding: confirm the management LAN NIC identity per site type
+- **Finding:** C8-CRIT-1 resolution. `:5100` must bind to the management LAN interface (not loopback) so Fleet can poll it for health/alarms. The tool's NIC layout varies: single-NIC tools, two-NIC tools (fab LAN / management LAN), VPN-only sites.
+- **Resolution needed:** confirm the management-NIC binding config per site type (binding is a config value in the endpoint manifest — no protocol change, no new component). Installer deliverable.
+- **Owner:** Ops/Infrastructure. **Blocks:** Wave 0 installer.
+
+### D17 — AOI code change: disable legacy kill-by-name gateway path in `clsInitAOI.cs`
+- **Finding:** OPS8-3 (CRITICAL). `clsInitAOI.cs:406` calls `KillStaleToolGatewayProcesses()` which sweeps by process name (`ToolGateway.Endpoint`, `:478-484`) at every AOI startup and exit. This destroys the ToolHost-supervised gateway (and its WAL drain in progress) on every AOI restart, and breaks the "tool visible when GUI closed" (T7) deliverable. The gateway ships under a new process name (`ToolConnect.Service.exe`); the Wave-0 AOI patch disables the kill-by-name spawn path (an existing ini flag already honored by the code).
+- **Resolution needed:** sign-off on the Wave-0 AOI patch disabling `KillStaleToolGatewayProcesses` for the new gateway binary name, and removing the exit-hook kill.
+- **Owner:** AOI dev team. **Blocks:** Wave 0 / P1a.
+
+### D18 — Service account provisioning method for ChildConfig `ServiceAccount`
+- **Finding:** CNN8-4 (MAJOR). The ChildConfig manifest will carry a `ServiceAccount` field (already added to the normative class diagram). The provisioning method on air-gapped fab sites — gMSA vs local service accounts, password lifecycle, rotation — needs a security work-stream decision. COM DCOM `RunAs` registration for ToolManager is an installer deliverable.
+- **Resolution needed:** specify the provisioning method per site type.
+- **Owner:** Security work-stream. **Blocks:** Wave 0.
+
+### D19 — ToolHost installer state machine (3→1 transition): implementation owner and test plan
+- **Finding:** OPS8-4 (MAJOR). The installer must follow the state machine: install ToolHost with old services stopped-but-still-registered (disabled, not deleted) → post-install :5100 health gate within T → only then delete old registrations; on gate failure, auto-re-enable old services. Implementation owner and installer test plan need assignment.
+- **Resolution needed:** name the implementation owner; agree on the test plan.
+- **Owner:** Installer/DevOps. **Blocks:** Wave 0.
+
+### D20 — Gateway binary rollback WAL compatibility: export path or N-1 backward-readable format
+- **Finding:** OPS8-7 (MAJOR). Rolling back the gateway binary to N-1 strands any WAL-Pending entries in a format the N-1 binary cannot read, losing those wafer records. Fix requires either: (a) a `--wal-export-legacy` CLI path that converts the WAL before rollback, or (b) a guaranteed backward-readable WAL format for N-1 (format version field + migration at startup). This is a Wave-0 deliverable decision.
+- **Resolution needed:** choose the WAL compatibility approach and assign implementation.
+- **Owner:** Gateway dev team. **Blocks:** Wave 0 / P1a rollback procedure.
+
+### D21 — ToolHost correlated-failure blast radius: GEM's job-object membership
+- **Finding:** OPS8-9 (MAJOR). ToolHost is a new single point of failure whose blast radius is wider than today's 3-service architecture — a ToolHost crash kills all children via job objects simultaneously. The GEM process (operator UI, E30 reporting) is particularly sensitive: a ToolHost crash mid-production kills GEM, dropping E30 state while the tool is still running.
+- **Resolution needed:** either exempt GEM from `KILL_ON_JOB_CLOSE` (breakaway job / monitored-not-owned — requires design), or gate GEM's manifest entry on a measured ToolHost stability criterion, or accept the blast radius with an alarm-on-simultaneous-child-death design. Product/GEM owner must decide.
+- **Owner:** Product + GEM owner. **Blocks:** Wave 0 (must be decided before GEM is added to the manifest).
+
+---
+
 ## Summary — what unblocks each phase
 
 | Phase | Must be signed first |
 |---|---|
-| **Wave 0 start** | D4 (owner named), D5 (ADR ratification) |
-| **P1a** | D7 (Fleet dedup key — cross-team), D8–D9 (P0 sink bounds), the P1a security exit criteria (`:5007` authn) |
+| **Wave 0 start** | D4 (owner named), D5 (ADR ratification), D16 (:5100 NIC binding), D18 (service accounts), D19 (installer plan), D21 (GEM blast radius) |
+| **P1a** | D7 (Fleet dedup key — required cross-team), D8–D9 (P0 sink bounds), D17 (AOI kill-path patch), D20 (WAL rollback compatibility), the P1a security exit criteria (`:5007` authn) |
+| **Wave 1 GEM** | D15 (SecsGemGui.Net session-0 split) |
 | **Wave 2** | D1 (CMM per-op authz) |
 | **P2–P3** | D10 (dds-node-status rate) |
 | **P4+ (per customer)** | D2 (HCACK-4 re-qual), D6 (dark-bus commissioning choice) |

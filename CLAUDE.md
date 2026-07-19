@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Folder | Role |
 |--------|------|
-| `stage\` | **Primary reference** — the current, self-contained, DESIGN READY package (5 adversarial cycles, all findings resolved). Start here. |
+| `stage\` | **Primary reference** — the current, self-contained, DESIGN READY package (8 adversarial cycles, all findings resolved). Start here. |
 | `tool-gateway-unification\` | Near-term design: unify ToolManager + ToolGateway without the bus. Independent of `stage\`; can ship first. |
 | `01-proposal\` | Authoritative full-detail designs (bus, AOI_Main, ToolHost, fabric) — normative where `stage\` cross-references depth |
 | `02-reviews\` | Audit trail / review records (read-only history) |
@@ -75,7 +75,7 @@ All production source lives under `C:\CamtekGit\BIS\Sources\`. Key files referen
 | COM event bus | `ToolManagement\ToolManager\Server\ToolEvents.cs` |
 | ToolManagerUiWrapper | `apps\Falcon.Net\CommonUtils\ComServerWrappers\ToolManagerUiWrapper.cs` |
 | ExternalControlCbUiWrapper | `apps\Falcon.Net\CommonUtils\ComServerWrappers\ExternalControlCbUiWrapper.cs` |
-| Start-Production trigger | `apps\Falcon.Net\Forms\frmJobTab.cs:941–982` |
+| Start-Production trigger | `apps\Falcon.Net\Forms\frmJobTab.cs` (line numbers stale — read the file directly) |
 | ToolGateway hook points | `apps\Falcon.Net\Forms\frmScanTab.cs` ~:1888–1902 and :10162 |
 | gRPC publisher | `system\CamtekSystem\PubSub\ToolApi\ToolApiPublisher.cs:88` |
 | SECS/GEM host mapping (live) | `ToolManagement\SecsGemObjects\Clients\RemoteControllers\RemoteControl.cs` |
@@ -90,8 +90,8 @@ The broader monorepo CLAUDE.md (build commands, C# standards, git conventions) i
 
 - **`frmProduction` is invisible.** Despite the `frm` prefix it has no UI — VB6→C# port using "form-as-code-module + COM host" pattern. Access via `MainContext.Instance.Forms.frmProduction`.
 - **ToolGateway bypasses `frmProduction`.** The gRPC push to ToolGateway (:5005) originates in `frmScanTab` (~:1888–1902, :10162), *after* results are copied to their stable path. `frmProduction.FireWaferScanResultsAreReady` fires earlier on the COM bus and ToolGateway does not subscribe to that bus. The push is not reliably fire-and-forget — `ToolApiPublisher` can block the scan thread when the gateway is down (`Thread.Sleep(1000)` + process spawn, no gRPC deadline).
-- **`ChangeToolState` has exactly three callers:** `clsInitAOI.cs` (Engineering on startup) and `frmJobTab.cs` (Production — two code paths, lines 948 and 981).
-- **COM event direction is two-way.** `frmProduction` pushes ~25 `Fire*` events *down* into `mFalconFireEvents`; COM callbacks from ToolManager fire *up* via `OnToolStateChanged`. Different wrappers, different interfaces.
+- **`ChangeToolState` callers:** `clsInitAOI.cs` (Engineering on startup) and `frmJobTab.cs` (Production — two code paths). The "exactly three" count and specific line numbers are unverified in live code; verify with grep before citing (D14).
+- **COM event direction is two-way.** `frmProduction` is the **definition host** for `Fire*` methods; there are **~80 `Fire*` call sites across 13 files** (verified in cycle-8 — ~2× the earlier "~25" estimate). COM callbacks from ToolManager fire *up* via `OnToolStateChanged`. Different wrappers, different interfaces.
 - **`ExternalControlCbUiWrapper` only forwards two commands to `frmProduction`:** `GuiStartManualScan` and `GuiExportMap`. All other factory-host commands are handled inside the wrapper.
 - **Tool state enum:** `NotInitialized → Initialization → Engineering ↔ EngineeringToProduction → Production`. Failure during `EngineeringToProduction` reverts to `Engineering`.
 - **Five live defects in shipped code** were found during this program (including a fleet-wide identity collision — every alphanumeric tool registers with Fleet as ToolId 0). See [stage/05-roadmap-and-risks.md §5.5](stage/05-roadmap-and-risks.md) and [stage/codeSnippets/16-live-bug-fixes.cs](stage/codeSnippets/16-live-bug-fixes.cs).

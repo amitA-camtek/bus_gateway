@@ -98,9 +98,9 @@ namespace Camtek.Messaging.Contracts
 
         private Topic() { }
 
-        // NOTE (M-29/SEC-1): the default is Acl.Deny, NOT Acl.Any — Acl.Any was the fail-open default.
+        // NOTE (M-29/SEC-1): the default is Acl.None, NOT Acl.Any — Acl.Any was the fail-open default.
         public static Topic Define(string name, DurabilityClass cls, Type payloadType,
-            Acl publishers = Acl.Deny, string[] durableSubscribers = null,
+            Acl publishers = Acl.None, string[] durableSubscribers = null,
             int payloadBudgetBytes = 0, StormControl stormControl = null)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentNullException("name");
@@ -160,10 +160,12 @@ namespace Camtek.Messaging.Contracts
             "tool.commands", DurabilityClass.R_RequestReply, typeof(ToolCommandPayload),
             publishers: Acl.GemShim | Acl.Gateway);
 
-        /// <summary>C: EFEM wafer / carrier events (P2).</summary>
+        /// <summary>C: EFEM wafer / carrier events (P2). Published by AOI_Main's BusAdapter
+        /// republishing IAutoLoaderCB COM callbacks — EfemSrv.exe (native C++ ATL) is untouched
+        /// (M-30/FEA7-1). ACL = AoiMain, not EfemServer.</summary>
         public static readonly Topic LoaderEvents = Topic.Define(
             "loader.events", DurabilityClass.C_BestEffort, typeof(LoaderEventPayload),
-            publishers: Acl.EfemServer);
+            publishers: Acl.AoiMain);
 
         /// <summary>B: retained — carrier + production state (P5).</summary>
         public static readonly Topic ProductionCarrier = Topic.Define(
@@ -223,7 +225,7 @@ namespace Camtek.Messaging.Contracts
                                                        // journal reset can't make fresh msgs look dup
         public long     Seq           { get; set; }   // per-(source,epoch,TOPIC) monotonic — ordering, dedup (X7-2)
         public DateTime TimestampUtc  { get; set; }
-        public int      SchemaVersion { get; set; } = 1; // additive-only; ignore-unknown
+        public int      SchemaVersion { get; set; } = 2; // additive-only; ignore-unknown; bumped for SourceEpoch field addition
         public long?    TtlMs         { get; set; }
         public int      Attempts      { get; set; }   // poison detection
         public string   PayloadType   { get; set; }
@@ -277,6 +279,11 @@ namespace Camtek.Messaging.Contracts
         /// retained delivery after subscribe this is a snapshot: PrevState = NotInitialized/unknown,
         /// and consumers run no edge logic on it.</summary>
         public ToolStateEnum PrevState { get; set; }
+        /// <summary>Publisher incarnation counter (R-2/M-9/C8-CRIT-8). Bumped on each ToolManager
+        /// restart. Dedup key is (Source, SourceEpoch, Topic, Seq); ordering key for consumers is
+        /// (SourceEpoch, StateSeq). Without this field, a restart resets StateSeq to 0 and all
+        /// fresh transitions look stale to consumers comparing seq alone.</summary>
+        public long          SourceEpoch { get; set; }
         /// <summary>Stamped inside a ToolManager transition-commit lock to be introduced (R-8; §03-lanes P3).
         /// Consumers order by (SourceEpoch, StateSeq) — a ToolManager restart resets StateSeq to 0 and
         /// would otherwise freeze application for days (M-9/GS7-4).</summary>

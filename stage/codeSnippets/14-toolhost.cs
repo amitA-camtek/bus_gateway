@@ -48,7 +48,7 @@ namespace Camtek.ToolHost
         {
             // CC7-11: StartAllAsync must RETURN after spawning (retaining the supervisor tasks),
             // NOT await its own infinite supervision loops — otherwise the health API never serves.
-            var supervisors = _supervisor.StartAll(ct);       // spawns + returns the loop tasks
+            var supervisors = await _supervisor.StartAllAsync(ct);  // spawns children + returns supervision tasks
             await Task.WhenAll(_health.ServeAsync(ct), Task.WhenAll(supervisors));
         }
 
@@ -61,7 +61,7 @@ namespace Camtek.ToolHost
         public void OnStop()
         {
             _supervisor.Stopping = true;                      // child exits now treated as final
-            _supervisor.StopAllAsync().GetAwaiter().GetResult(); // reverse startOrder + per-child timeout
+            _supervisor.StopAllAsync(TimeSpan.FromSeconds(30), CancellationToken.None).GetAwaiter().GetResult(); // reverse startOrder + per-child timeout
             _run.Cancel();
         }
     }
@@ -89,7 +89,10 @@ namespace Camtek.ToolHost
             _manifest = manifest;
         }
 
-        public async Task StartAllAsync(CancellationToken ct)
+        // Returns the per-child supervision loop tasks WITHOUT awaiting them — the caller (RunAsync)
+        // awaits them alongside the health API. Never await them here: that would block health serving
+        // (CC7-11 / review S-5).
+        public async Task<IReadOnlyList<Task>> StartAllAsync(CancellationToken ct)
         {
             CreateJobObject();
 
@@ -100,7 +103,22 @@ namespace Camtek.ToolHost
             var supervisors = new List<Task>();
             foreach (var config in orderedConfigs)
             {
-                var child = await StartChildAsync(config, ct);
+                // C9-5: spawn failure is a restart-class failure. Initial-spawn semantics:
+                // quarantine-never (broker/gateway) → fail-fast; leaf → degrade-and-alarm.
+                ChildProcess child;
+                try
+                {
+                    child = await StartChildAsync(config, ct);
+                }
+                catch (ChildSpawnException ex)
+                {
+                    if (config.QuarantineNever)
+                        throw new InvalidOperationException($"Critical child '{config.Name}' failed initial spawn — ToolHost cannot start.", ex);
+                    // Leaf: degrade-and-alarm; siblings continue.
+                    Alarm(new ChildProcess(config, null), 1);
+                    Quarantine(new ChildProcess(config, null), 1);
+                    continue;
+                }
                 _children[config.Name] = child;
                 // §1.3.3 startOrder gates the initial START order; readiness (broker pipe accepting)
                 // should gate the next tier (review CN-15) — omitted here for brevity.
@@ -109,7 +127,7 @@ namespace Camtek.ToolHost
                 // backoff must not delay detection or restart of any sibling.
                 supervisors.Add(SuperviseChildAsync(config.Name, ct));
             }
-            await Task.WhenAll(supervisors);
+            return supervisors; // NOT awaited — caller does Task.WhenAll
         }
 
         // ── Per-child crash-containment loop ───────────────────────────────────────
@@ -147,7 +165,17 @@ namespace Camtek.ToolHost
                 var backoff = ExponentialBackoff(count, maxMs: 30_000);
                 Alarm(child, count); // escalating — LOG → WARN → ERROR → PAGE
                 await Task.Delay(backoff, ct);
-                _children[name] = await StartChildAsync(config, ct); // REPLACE the entry
+                // C9-5: spawn failure counted in the same window, backed off, alarmed again.
+                try
+                {
+                    _children[name] = await StartChildAsync(config, ct); // REPLACE the entry
+                }
+                catch (ChildSpawnException ex)
+                {
+                    var spawnCount = window.RecordAndCountLastHour(); // count spawn failure once
+                    Alarm(child, spawnCount); // escalating alarm
+                    // Loop continues — next iteration of SuperviseChildAsync will retry after delay.
+                }
             }
             else if (count > config.MaxRestartsPerHour)
             {
@@ -158,7 +186,15 @@ namespace Camtek.ToolHost
             {
                 var backoff = ExponentialBackoff(count, maxMs: config.MaxBackoffMs);
                 await Task.Delay(backoff, ct);
-                _children[name] = await StartChildAsync(config, ct); // REPLACE the entry
+                // C9-5: spawn failure counted in the same window, backed off, alarmed.
+                try
+                {
+                    _children[name] = await StartChildAsync(config, ct); // REPLACE the entry
+                }
+                catch (ChildSpawnException)
+                {
+                    window.RecordAndCountLastHour(); // count the spawn failure; supervisor loop retries
+                }
             }
         }
 
@@ -171,12 +207,39 @@ namespace Camtek.ToolHost
                     UseShellExecute = false
                 }
             };
-            proc.Start();
+
+            // C9-5: spawn failure is a restart-class failure — caught and surfaced as ChildSpawnException
+            // so the caller (HandleChildExitAsync / StartAllAsync) can count, back off, and alarm.
+            bool started;
+            try
+            {
+                started = proc.Start();
+            }
+            catch (Exception ex)
+            {
+                proc.Dispose();
+                throw new ChildSpawnException(config.Name, ex);
+            }
+            if (!started)
+            {
+                proc.Dispose();
+                throw new ChildSpawnException(config.Name, new Exception("Process.Start() returned false"));
+            }
 
             // Assign to job object — KILL_ON_JOB_CLOSE ensures no orphans on ToolHost exit.
             AssignProcessToJob(proc.Handle, _jobHandle);
 
             return Task.FromResult(new ChildProcess(config, proc));
+        }
+
+        public sealed class ChildSpawnException : Exception
+        {
+            public string ChildName { get; }
+            public ChildSpawnException(string name, Exception inner)
+                : base($"Failed to spawn child '{name}': {inner?.Message}", inner)
+            {
+                ChildName = name;
+            }
         }
 
         private void CreateJobObject()
@@ -247,8 +310,12 @@ namespace Camtek.ToolHost
 
         public async Task ServeAsync(CancellationToken ct)
         {
+            // :5100 must bind the management LAN interface (NOT loopback) so Fleet can poll it off-box
+            // (C8-CRIT-1/D16). The binding address is a signed-manifest config value — not hardcoded.
+            // http://+:5100/ (all interfaces) is the safe default for sites without a fixed mgmt NIC.
+            var listenAddress = _manifest.HealthBindAddress ?? "http://+:5100/";
             var listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost:5100/health/");
+            listener.Prefixes.Add(listenAddress + "health/");
             listener.Start();
 
             while (!ct.IsCancellationRequested)
@@ -287,8 +354,9 @@ namespace Camtek.ToolHost
 
     public sealed class EndpointManifest
     {
-        public string       Hash     { get; private set; } // SHA-256 of the manifest content
-        public List<ChildConfig> Children { get; private set; }
+        public string       Hash              { get; private set; } // SHA-256 of the manifest content
+        public string       HealthBindAddress { get; private set; } // e.g. "http://192.168.10.1:5100/" (mgmt NIC, D16)
+        public List<ChildConfig> Children     { get; private set; }
 
         public static EndpointManifest Load(string path = @"C:\bis\config\toolbus.json")
         {
@@ -330,7 +398,7 @@ namespace Camtek.ToolHost
                 new ChildConfig
                 {
                     Name            = "gateway",
-                    ExecutablePath  = @"C:\bis\bin\ToolConnect.exe",
+                    ExecutablePath  = @"C:\bis\bin\ToolConnect.Service.exe",
                     StartOrder      = 1,
                     QuarantineNever = true,   // §5.3: "quarantine: never"
                     MaxBackoffMs    = 30_000
@@ -377,7 +445,7 @@ namespace Camtek.ToolHost
     {
         public ChildConfig Config    { get; }
         public Process     Process   { get; }
-        public bool        IsRunning { get { return !Process.HasExited; } }
+        public bool        IsRunning { get { return Process != null && !Process.HasExited; } }
 
         public ChildProcess(ChildConfig config, Process process)
         {

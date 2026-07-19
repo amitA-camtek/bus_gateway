@@ -60,8 +60,8 @@ flowchart LR
             BUS[["Bus broker 🟩NEW (child)"]]
             GW["ToolConnect gateway 🟧CHANGED (child)"]
             TS["Camtek.ToolServices host 🟩NEW (child, :5060)"]
+            SGP["SecsGemGui.Net 🟧CHANGED\nGEM logic + bus shim\n(ToolHost child, startOrder after broker)\n⚠ D15: session-0 interactive-UI split required\nbefore Wave 1 GEM entry"]
         end
-        SGP["SecsGemGui.Net 🟧CHANGED\nGEM logic + bus shim\n(ToolHost child, startOrder after broker)"]
         AOI["AOI_Main 🟧CHANGED (.NET FW 4.8)\nbus client - dials out, never listens\n(exception: :50055 CMM, localhost-only,\nuntil the CMM split - D-12)"]
         FW["FalconWrapper.exe (existing, ZERO change)\nlegacy event hub (frozen facade,\nAOI-side bridge)"]
         TM["ToolManager / ProductionManager 🟧CHANGED\nstate machine + bus shim"]
@@ -211,7 +211,7 @@ flowchart TB
     subgraph B["Broker process 🟩NEW (net8, ToolHost child, startOrder 0)"]
         CONN["Connection manager\nnamed pipe per process - ACL identity -\nreader/writer SPLIT per connection"]
         REG["Topic registry\nclass + publish-ACL per topic"]
-        QA["Class-A queues (bounded 128)\nfull - NACK - RESUME on drain"]
+        QA["Class-A queues (bounded 256)\nfull - NACK - RESUME on drain"]
         QB["Class-B retained slots\nlocked keyed-slot, atomic dequeue,\nlast value delivered on subscribe"]
         QC["Class-C queues\ndrop-oldest + counted"]
         WR["Per-connection writer task\npriority lanes REQ/REPLY over A over B/C\nwrite deadline - disconnect on stall"]
@@ -295,6 +295,8 @@ flowchart TB
 
 **Flow — crash containment:** child exits → log + backoff restart → `maxPerHour` exceeded → *leaf* children quarantine (siblings unaffected); **broker/gateway never quarantine** (infinite max-backoff restarts + escalating alarm — a dark fabric costs more than a 2-minute retry). A killed ToolHost tears down all children via job objects — no orphans, ever.
 
+**Spawn failure is a restart-class failure (C9-5).** If `Process.Start()` throws or returns `false`, the failure is caught, counted in the same per-child sliding restart window, backed off, and alarmed — exactly as a crash exit. The supervision loop terminates only on the stop token, not on spawn errors. **Initial-spawn semantics:** if a `quarantine: never` child (broker or gateway) fails its first `Start()` call, ToolHost **fails-fast** (service start aborts with alarm); if a leaf child fails its initial spawn, ToolHost **degrades-and-alarms** (child marked quarantined, siblings continue).
+
 **Graceful stop vs supervision (M-19/CC7-9).** A `SERVICE_CONTROL_STOP` sets a supervisor-level **`Stopping` latch *before* the first drain signal**; while `Stopping`, any child exit is treated as **final** — no restart, no alarm escalation — so the reverse-order drain (R-OPS-3) is not fought by the `quarantine: never` restart loop it would otherwise trigger (which would restart the broker/gateway mid-drain and then job-object-kill the fresh instance). `OnStop` = set latch → `await StopAllAsync` (reverse startOrder, per-child drain timeout) → cancel the run token. Supervision is suspended for the duration of an ordered stop.
 
 **Class design** (realized in [codeSnippets/14-toolhost.cs](codeSnippets/14-toolhost.cs)) — **every class below is 🟩 NEW** (the ToolHost design; no pre-existing types shown):
@@ -319,6 +321,7 @@ classDiagram
         +ProcessPriorityClass PriorityClass
         +int MaxRestartsPerHour
         +int MaxBackoffMs
+        +string ServiceAccount : gMSA or local svc acct - pipe ACL linchpin (D18)
     }
     class ChildProcess {
         +ChildConfig Config
@@ -375,7 +378,7 @@ flowchart LR
     style SG fill:#FFF3E0,stroke:#EF6C00,color:#E65100;
 ```
 
-**Degraded contract — an explicit 4-state machine (resolves R-6).** The fab-facing promise is: *the fab never discovers a bus outage through mysterious host timeouts.* The shim is a state machine over **HSMS × bus**, not two booleans, and it **starts in the degraded state** — it leaves only when a bus **handshake** (a real REQ/PONG round-trip, not a `Health.IsConnected` flag read) completes:
+**Degraded contract — an explicit 4-state machine (resolves R-6).** The fab-facing promise is: *the fab never discovers a bus outage through mysterious host timeouts.* The shim is a state machine over **HSMS × bus**, not two booleans, and it **starts in the degraded state** — it leaves only when a **bus handshake to the broker completes: a PING round-trip to the broker, not a `Health.IsConnected` flag read and not a REQ to `tool.state.replay` (which would require ToolManager to be up as a prerequisite).** `tool.state.replay` availability is a *separate*, independently-alarmed condition: "state source unavailable" produces `host-visible E30 state UNKNOWN`, not `ONLINE-LOCAL-because-bus-dark`. **All ShimState transitions are serialized under `_shimLock`: field mutations (`_busAvailable`, `_remoteGranted`) are made atomically under the lock; SECS callbacks (`SetControlState`, `SendCollectionEvent`) are always invoked AFTER releasing the lock — never inside it. The HCACK decision reads state and makes the `HcackDenied` vs `Pending` choice on the reader thread (under the `_shimLock` guard — fast, non-blocking read); the degrade side-effects (SetControlState + BusDegraded/BusRecovered CEID emission) are invoked on the calling thread after the lock is released. This ensures the SECS reader thread is never parked inside a lock while waiting for a COM call to return. (C9-4)**
 
 | HSMS | Bus | Shim behavior |
 |---|---|---|
@@ -386,7 +389,7 @@ flowchart LR
 
 **The async-accept path uses HCACK=4, not HCACK=0-on-completion (X7-8 — a host-visible change, so scoped honestly).** A normal-state host command that must complete off the reader thread is answered with **`eCmdPerformLater` (HCACK=4)** — "accepted, will be performed later" — with the true outcome delivered as a **named completion CEID**; `IGemTransaction.CompleteHcack` *raises that event*. This is what the untouched Cimetrix driver actually offers: its `IE30CommandCB.CommandCalled([in,out] eCommandResults)` derives HCACK from the value written **before the callback returns** — there is no deferred-reply handle, so "accepted, completed async as HCACK=0" is impossible without parking the reader (the thing R-6 forbids). Consequently the **"byte-identical host wire" claim holds for events and state but *not* for host commands** — the accept path changes the HCACK sequence and is therefore in the **P4/P5 host-requalification budget** ([04 §4.2](04-impact-analysis.md)), not the untouched core. The *denial* path is unchanged (reader-thread HCACK denial). **"Bus available" is the composite signal** — connected AND heartbeat-fresh AND loop-lag < L — not the raw socket flag (a hung broker holds the pipe open). On recovery the shim returns to **ONLINE-LOCAL and lets the host re-grant REMOTE** (auto-promotion to REMOTE is a compliance bug). `SecsGemGui.Net` is a **ToolHost-supervised child** with startOrder > broker (it was previously unmanaged, so its handshake had no ordering guarantee).
 
-**No missed E30 transitions (resolves the class-B gap, DI-8) — via a registered replay topic, not prose (X7-7).** `tool.state` stays class-B/retained for the *current-state* consumers, but the GEM shim additionally recovers the last-N transitions after a reconnect blip through **`tool.state.replay`, a registered R-R topic** ([06 §6.6](06-bus-implementation.md)) served by the ToolManager shim from a bounded last-N buffer the R-8 fan-out worker appends to (§2.4 produces exactly the `(prev, new, seq)` records it needs). So the shim replays the intermediate transitions — e.g. an `Engineering → EngineeringToProduction → Engineering` failure cycle — and reports every E30 CEID the host expects. This is a first-class topic with an ACL, counted in View 3 — the earlier "bounded last-N ring republished by ToolManager" named no topic, no server, and no storage (class-B retains only the *last* value), so it had no mechanism. **`ToolStatePayload` carries `PrevState` (M-8)** because the live E30 mapping dispatches on `(prev, curr)` edges (`AlarmsManager`, `E30Client`); the first retained delivery after subscribe is marked a snapshot (`prev = unknown`) and consumers run no edge logic on it. N ≈ 16 is validated against a P0 "max transitions per outage window" measurement (§5.2), not asserted. (`stateSeq`, ordered as `(SourceEpoch, StateSeq)` so a ToolManager restart cannot freeze it — M-9 — lets the shim *detect* a gap; the replay topic lets it *recover* one.)
+**No missed E30 transitions (resolves the class-B gap, DI-8) — via a registered replay topic, not prose (X7-7).** `tool.state` stays class-B/retained for the *current-state* consumers, but the GEM shim additionally recovers the last-N transitions after a reconnect blip through **`tool.state.replay`, a registered R-R topic** ([06 §6.6](06-bus-implementation.md)) served by the **ToolManager shim** (the `TransitionRingServer`, in the ToolManager process) from a bounded last-N ring the R-8 fan-out worker appends to; the GEM shim is a *client* that REQs this topic on reconnect. So the shim replays the intermediate transitions — e.g. an `Engineering → EngineeringToProduction → Engineering` failure cycle — and reports every E30 CEID the host expects. This is a first-class topic with an ACL, counted in View 3 — the earlier "bounded last-N ring republished by ToolManager" named no topic, no server, and no storage (class-B retains only the *last* value), so it had no mechanism. **`ToolStatePayload` carries `PrevState` (M-8)** because the live E30 mapping dispatches on `(prev, curr)` edges (`AlarmsManager`, `E30Client`); the first retained delivery after subscribe is marked a snapshot (`prev = unknown`) and consumers run no edge logic on it. N ≈ 16 is validated against a P0 "max transitions per outage window" measurement (§5.2), not asserted. (`stateSeq`, ordered as `(SourceEpoch, StateSeq)` so a ToolManager restart cannot freeze it — M-9 — lets the shim *detect* a gap; the replay topic lets it *recover* one.) **Ring overflow behavior (gap > N):** the REPLY carries `(epoch, ringFloorSeq)`; when the shim detects that the gap exceeds the ring, it reports the available transitions, then raises a dedicated `state-report-discontinuity` alarm CEID, and delivers current state as a fresh snapshot (`prev = unknown`) — no edge logic is run for the gap. A gap spanning a ToolManager restart (epoch bump, ring emptied) is detectable via the epoch change and triggers the same behavior.
 
 **Standing (a normal P0 gate, not a design gap):** the Ttl margin `ttl + margin < E30` uses per-site E30 timeouts — a **P0 measurement of the same class the design already carries** (group-commit interval, single-instance ceilings, TsmcSink service time; §5.2 Wave 0). The shim **asserts `ttl + margin < E30` at config load and fails loudly** if a site's config violates it, so a bad number is caught at startup, never in production. The machine is fully specified; the numbers are measured at P0 like every other tool.
 
@@ -396,14 +399,15 @@ flowchart LR
 classDiagram
     class GemBusShim {
         -IBus _bus
-        -ShimState _state : the 4-state HSMS x bus machine
-        -TransitionRing _ring
+        -ShimState _state : the 4-state HSMS x bus machine (lock-serialized)
         +HandleS2F41StartManualScan(correlationId, tx) GemCommandDisposition
-        -OnBusHandshakeCompleted() : REQ/PONG round-trip, not a flag read
+        -OnBusHandshakeCompleted() : PING round-trip TO BROKER (not tool.state.replay REQ)
         -OnBusLost() : composite signal - to degraded + alarm CEID
         -OnToolStateTransition(payload) : E30 CEID report
+        -OnReconnect() : REQ tool.state.replay for missed transitions
         +Dispose()
     }
+    note for GemBusShim "All ShimState transitions serialized under _shimLock;\nSECS callbacks always invoked OUTSIDE the lock.\nBus-up = broker PING round-trip.\ntool.state.replay availability is a separate\nindependently-alarmed condition."
     class ShimState {
         <<enumeration>>
         DegradedNoBus : initial state
@@ -411,10 +415,12 @@ classDiagram
         NoHost
         BothDown
     }
-    class TransitionRing {
-        -ToolStatePayload[] _lastN : N = 16, republished by ToolManager
-        +ReplayGap(fromSeq) : missed E30 transitions after reconnect (DI-8)
+    class TransitionRingServer {
+        -ToolStatePayload[] _lastN : N = 16 (in ToolManager shim process)
+        +ServeReplayTopic() : Serve tool.state.replay R-R topic (X7-7)
+        +AppendTransition(payload) : R-8 fan-out worker appends
     }
+    note for TransitionRingServer "Lives in ToolManager shim process.\nGemBusShim is a client — REQs tool.state.replay.\nGap > N: shim reports available transitions\nthen raises state-report-discontinuity alarm CEID\nand delivers current state as a fresh snapshot (prev=unknown)."
     class GemCommandDisposition {
         <<enumeration>>
         HcackDenied : decided ON the reader thread, immediate
@@ -443,15 +449,27 @@ classDiagram
     }
 
     GemBusShim --> ShimState
-    GemBusShim --> TransitionRing
+    GemBusShim ..> TransitionRingServer : REQ tool.state.replay (separate process)
     GemBusShim --> GemControlState
     GemBusShim ..> IGemSecsCallbacks : replies async, never Wait on reader
     GemBusShim ..> IGemTransaction
     GemBusShim --> TtlConfig
 
     classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
-    cssClass "GemBusShim,ShimState,TransitionRing,GemCommandDisposition,GemControlState,IGemSecsCallbacks,IGemTransaction,TtlConfig" new
+    cssClass "GemBusShim,ShimState,TransitionRingServer,GemCommandDisposition,GemControlState,IGemSecsCallbacks,IGemTransaction,TtlConfig" new
 ```
+
+**GemShimHarness test suite (C8-MAJ-27 — named deliverable in `SecsGemObjects.Tests`):** the 4-state HSMS × bus machine cannot be exercised end-to-end by a real SECS driver in a unit test. `GemShimHarness` drives `GemBusShim` via a fake SECS transaction + a `FakeBus` (from the bus TestKit), scripting bus-up/bus-down/HSMS-up/HSMS-down transitions:
+
+| # | Assertion | Tier |
+|---|---|---|
+| GS-1 | HSMS up + bus up → Normal; host command → bus REQ published; HCACK=4 returned on post | PR |
+| GS-2 | Bus down while HSMS up → DegradedNoBus; host command → HCACK denial **on reader thread** (no `Task.Wait`/timeout); alarm CEID raised | PR |
+| GS-3 | Bus reconnect (PING round-trip) → Normal; state-replay REQ sent; transitions replayed; tool.state subscribers notified | PR |
+| GS-4 | TransitionRingServer gap > N: shim reports available transitions, then raises state-report-discontinuity alarm CEID, delivers current state as fresh snapshot (prev=unknown) | PR |
+| GS-5 | HSMS down while bus up → `NoHost` state (ShimState enum); bus commands still dispatched; remote-control transition recorded | nightly |
+| GS-6 | All four states reachable from DegradedNoBus (initial) without unreachable transitions | PR |
+| GS-7 | Concurrent `HandleS2F41` calls: all decisions made under the single shim lock; no two calls produce a `Pending` (HCACK=4) grant while in a non-Normal state (non-Normal state → `HcackDenied` for all concurrent callers, never `Pending`) | PR |
 
 ### 1.3.5 ToolServices host (`Camtek.ToolServices.Host`, :5060)
 
@@ -520,6 +538,6 @@ classDiagram
 | **Security** (R-7 — see [§6.8](06-bus-implementation.md)) | Publish ACLs key on the **OS-authenticated pipe account** (distinct service accounts per privileged publisher), never a self-asserted `sourceName`; default-deny; **signed+verified child manifest** (fail-closed); `:5007` default-deny, authenticated (**mTLS — decided**; Windows-auth fallback), minimum-interface bound + rate-limited; spool/journal/dead-letter at-rest ACLs; **append-only off-bus audit** before publish. Owner: Security (Ofek Harel) — a P1a entry criterion |
 | **Storm control** | Error telemetry coalesced per `(source, errorCode)` + token bucket in the library — a flapping sensor costs summaries, not 300k journaled messages |
 | **Endpoints** | One ToolHost-owned manifest; endpoint hash in the fleet fingerprint; DNS for Fleet |
-| **Ports (with binding — SEC7-3/4/8)** | :5007 gateway commands (**MES VLAN**, mTLS, per-op authz) · :5060 ToolServices (**loopback**, svc-account ACL) · :5100 ToolHost health (**loopback/mgmt iface**, authenticated — an open :5100 leaks the manifest hash) · gateway diagnostic REST (**loopback**, own authn) · :5050 Fleet egress (**outbound**, cleartext today — residual accepted risk, M-15) · retired: :5005; contained→retired: :50055 (loopback). The bus uses **no ports** (named pipes) |
+| **Ports (with binding — SEC7-3/4/8)** | :5007 gateway commands (**MES VLAN**, mTLS, per-op authz) · :5060 ToolServices (**loopback**, svc-account ACL) · :5100 ToolHost health (**management LAN interface** — not loopback; Fleet polls this endpoint off-box; binding interface is a signed-manifest config value, see D16 for per-site-type confirmation; authenticated — an open :5100 leaks the manifest hash) · gateway diagnostic REST (**loopback**, own authn) · :5050 Fleet egress (**outbound**, cleartext today — residual accepted risk, M-15) · retired: :5005; contained→retired: :50055 (loopback). The bus uses **no ports** (named pipes) |
 
 Load: nominal <1 msg/s, wafer bursts ~50, storms capped at 10/s per source — every buffer is sized against this model with 4–5 orders of magnitude of single-instance headroom (no load balancing needed on-tool; fleet-side herd control via jitter + drain caps).

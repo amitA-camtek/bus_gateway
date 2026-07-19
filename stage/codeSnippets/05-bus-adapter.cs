@@ -32,6 +32,8 @@ namespace Falcon.Net.Bus
         // _uiMarshaller). No lock is needed — but the invariant must be asserted, not assumed
         // (review CC-13): OnToolStateEvent/OnSnapshot should Debug.Assert(!InvokeRequired).
         private long _lastAppliedSeq = -1;
+        private long _lastEpoch      = -1;           // publisher incarnation (R-2/C8-CRIT-8): dedup key
+                                                     // is (SourceEpoch, StateSeq) — epoch resets seq space
         private readonly List<ToolStateEvent> _preSnapshotBuffer = new List<ToolStateEvent>();
         private const int PreSnapshotBufferCap = 512;   // alarm + drop-oldest beyond this (S-11)
         private bool _snapshotApplied;
@@ -137,7 +139,7 @@ namespace Falcon.Net.Bus
             // Handler runs on a pool thread; marshal to UI thread before applying.
             var payload = msg.Payload;
             _uiMarshaller.TryPost(() => OnToolStateEvent(
-                new ToolStateEvent { State = payload.State, StateSeq = payload.StateSeq }));
+                new ToolStateEvent { State = payload.State, SourceEpoch = payload.SourceEpoch, StateSeq = payload.StateSeq }));
             return Task.CompletedTask;
         }
 
@@ -152,16 +154,16 @@ namespace Falcon.Net.Bus
             // The snapshot post MUST land, or _snapshotApplied stays false forever and every later
             // tool.state event buffers unboundedly (review S-11/CC-13). At startup the main form
             // handle may not exist yet → TryPost returns false. Retry until the handle is up.
-            PostSnapshotWhenReady(snapshot.State, snapshot.StateSeq);
+            PostSnapshotWhenReady(snapshot.State, snapshot.SourceEpoch, snapshot.StateSeq);
         }
 
-        private void PostSnapshotWhenReady(ToolStateEnum state, long seq)
+        private void PostSnapshotWhenReady(ToolStateEnum state, long epoch, long seq)
         {
-            if (_uiMarshaller.TryPost(() => OnSnapshot(state, seq)))
+            if (_uiMarshaller.TryPost(() => OnSnapshot(state, epoch, seq)))
                 return;
             // Handle not created / shutting down. Re-arm shortly; the marshaller is shutdown-aware,
             // so once shutdown is signalled this simply stops (no infinite loop at teardown).
-            _uiMarshaller.RunWhenReady(() => PostSnapshotWhenReady(state, seq));
+            _uiMarshaller.RunWhenReady(() => PostSnapshotWhenReady(state, epoch, seq));
         }
 
         // UI thread — the stateSeq ordering logic from §2.4.
@@ -179,22 +181,28 @@ namespace Falcon.Net.Bus
                 _preSnapshotBuffer.Add(e);
                 return;
             }
-            ApplyIfNewer(e.State, e.StateSeq);
+            ApplyIfNewer(e.State, e.SourceEpoch, e.StateSeq);
         }
 
         // UI thread.
-        private void OnSnapshot(ToolStateEnum state, long seq)
+        private void OnSnapshot(ToolStateEnum state, long epoch, long seq)
         {
-            ApplyIfNewer(state, seq);
-            foreach (var e in _preSnapshotBuffer.OrderBy(x => x.StateSeq))
-                ApplyIfNewer(e.State, e.StateSeq);
+            ApplyIfNewer(state, epoch, seq);
+            foreach (var e in _preSnapshotBuffer
+                .OrderBy(x => x.SourceEpoch)
+                .ThenBy(x => x.StateSeq))
+                ApplyIfNewer(e.State, e.SourceEpoch, e.StateSeq);
             _preSnapshotBuffer.Clear();
             _snapshotApplied = true;
         }
 
-        private void ApplyIfNewer(ToolStateEnum s, long seq)
+        // Ordering key is (SourceEpoch, StateSeq): a ToolManager restart resets StateSeq to 0
+        // but bumps epoch, so fresh-after-restart transitions are never dropped as stale (C8-CRIT-8).
+        private void ApplyIfNewer(ToolStateEnum s, long epoch, long seq)
         {
-            if (seq <= _lastAppliedSeq) return;  // stale — drop
+            if (epoch < _lastEpoch) return;
+            if (epoch == _lastEpoch && seq <= _lastAppliedSeq) return;
+            _lastEpoch      = epoch;
             _lastAppliedSeq = seq;
             _reactions.Apply(s);                 // atomic block, never split across disciplines (P3 rule)
         }
@@ -223,10 +231,10 @@ namespace Falcon.Net.Bus
 
         // ─── Stubs ────────────────────────────────────────────────────────────────
 
-        private (ToolStateEnum State, long StateSeq) FetchToolStateFromCom()
+        private (ToolStateEnum State, long SourceEpoch, long StateSeq) FetchToolStateFromCom()
         {
-            // TODO: call ToolManagerUiWrapper.GetCurrentState() + .GetCurrentStateSeq()
-            return (ToolStateEnum.Engineering, 0L);
+            // TODO: call ToolManagerUiWrapper.GetCurrentState() + .GetCurrentStateSeq() + .GetSourceEpoch()
+            return (ToolStateEnum.Engineering, 0L, 0L);
         }
 
         private static void Alarm() { /* → ToolHost alarm surface + log */ }
@@ -242,8 +250,9 @@ namespace Falcon.Net.Bus
 
     public sealed class ToolStateEvent
     {
-        public ToolStateEnum State    { get; set; }
-        public long          StateSeq { get; set; }
+        public ToolStateEnum State       { get; set; }
+        public long          SourceEpoch { get; set; } // publisher incarnation (C8-CRIT-8/R-2)
+        public long          StateSeq    { get; set; }
     }
 
     /// <summary>

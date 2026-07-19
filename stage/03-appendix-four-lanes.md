@@ -131,7 +131,7 @@ public static readonly Topic ToolTelemetry =
 #### EFEM loader events → `loader.events` (P2)
 
 - **Today:** `IAutoLoaderCB` COM callbacks into AOI's `AutoLoaderUIWrapper`, marshaled ad-hoc.
-- **What happens:** a thin shim in the EFEM COM server publishes class-C `loader.events`; AOI's BusAdapter subscribes and feeds the (absorbed) RobotUI and GUI via one marshal; the CB sink registration is retired after dual-run. Wafer-move **commands** stay COM (lane D).
+- **What happens:** AOI_Main's BusAdapter **republishes** the existing `IAutoLoaderCB` COM callbacks onto class-C `loader.events` (same AOI-side republish pattern as ScenarioManager events — M-30/FEA7-1); a future EfemSrv-native publisher is deferred until `camtek_bus.dll` ships. RobotUI and GUI subscribe via one marshal; the CB sink registration is retired after dual-run. Wafer-move **commands** stay COM (lane D).
 - **Risk:** low — one-way notifications; the shim is additive.
 
 #### The `Fire*` hub edge → `scan.operations` / `scan.announced` (P2 — the biggest diff)
