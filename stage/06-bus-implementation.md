@@ -4,6 +4,13 @@
 > Up-links: where the bus sits → [01-system-architecture.md](01-system-architecture.md); AOI usage → [02-aoi-architecture.md](02-aoi-architecture.md); adoption method → [03-appendix-four-lanes.md](03-appendix-four-lanes.md).
 > Incorporates all resolutions of the concurrency/connectivity/load review (Revision 3).
 
+> **Diagram legend — new vs existing:** this document specifies the **`Camtek.Messaging`
+> library, broker, and TestKit — all three are 🟩 NEW projects** ([04-impact-analysis.md §4.1](04-impact-analysis.md)).
+> Consequently **every class in all three class diagrams below is 🟩 NEW**; a caption states
+> this above each. No pre-existing types are shown, so per-class colour tags are omitted as
+> redundant. (The WAL contract this doc references belongs to the evolved gateway — new-vs-existing
+> for that is tagged in [07-toolconnect-design.md](07-toolconnect-design.md).)
+
 ---
 
 ## 6.1 Projects & packaging
@@ -128,7 +135,7 @@ pump reader:           E2E_ACK ──► enqueue Acked(seq) to journal thread �
 
 ### Class design — public API + client internals
 
-(Realized in [codeSnippets/](codeSnippets/) 01–03; contracts §6.2, internals as above.)
+(Realized in [codeSnippets/](codeSnippets/) 01–03; contracts §6.2, internals as above.) — **every class below is 🟩 NEW** (the `Camtek.Messaging` client library).
 
 ```mermaid
 classDiagram
@@ -259,7 +266,7 @@ The gateway's `BusSource` is the class-A subscriber; its WAL is the message's du
 
 ### Class design — broker internals
 
-(Realized in [codeSnippets/04-broker.cs](codeSnippets/04-broker.cs) — the prose above is normative where the sketch diverges, per S-6/S-7/S-12.)
+(Realized in [codeSnippets/04-broker.cs](codeSnippets/04-broker.cs) — the prose above is normative where the sketch diverges, per S-6/S-7/S-12.) — **every class below is 🟩 NEW** (the broker).
 
 ```mermaid
 classDiagram
@@ -393,6 +400,8 @@ The composite scenarios (5, 5b, 6b, 11–14) exist because every reviewed failur
 ### TestKit component design (`Camtek.Messaging.TestKit`)
 
 **Responsibility:** the shipped instruments that make the 14 assertion groups (incl. 5b/5c/6b) *writable by every migrating team* — a consumer test needs a fake bus, fault injection, and capture/assertion helpers, not a live broker. Targets `net48;net8.0`, both bitnesses (R-TS-1) — the net48 build is the one AOI actually loads.
+
+> **Every class below is 🟩 NEW** — the `Camtek.Messaging.TestKit`.
 
 ```mermaid
 classDiagram

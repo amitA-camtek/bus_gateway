@@ -8,6 +8,17 @@
 
 ## 1.1 Architecture views
 
+> **Diagram legend — new vs existing** (applies to every flowchart in this doc): 🟩 **NEW** =
+> new component built by this program · 🟧 **CHANGED** = existing component modified
+> (evolved / extended) · 🟥 **RETIRED** = existing component removed · plain / untagged =
+> unchanged or external. Tags appear both inline in node labels and as node colour; the
+> authoritative created / modified / retired accounting is [04-impact-analysis.md](04-impact-analysis.md).
+> Sequence-diagram **participants** and class-diagram **classes** are tagged too (same
+> 🟩/🟧/🟥 scheme, written into the participant/class label or a caption above the diagram);
+> actor-only participants (e.g. "all publishers") stay plain. Class-diagram colour is applied
+> where the renderer supports classDiagram `classDef`. The WAL state-machine (stateDiagram) is
+> not tagged — states are not components.
+
 ### View 1 — Context (highest level)
 
 The tool has exactly **two doors** — GEM for the factory host, ToolConnect for everything else — one internal **fabric**, and the **machine core** doing the work.
@@ -16,10 +27,10 @@ The tool has exactly **two doors** — GEM for the factory host, ToolConnect for
 flowchart LR
     HOST["Factory Host"]
     subgraph T["Falcon Tool"]
-        GEMD["GEM door\n(SecsGemGui.Net over\nCimetrix driver - wire unchanged)"]
-        FAB[["Fabric\nCamtek.Messaging bus"]]
-        GWD["Gateway door\nToolConnect"]
-        CORE["Machine core\nAOI_Main (GUI + scan engine) ·\nToolManager (state machine) · EFEM"]
+        GEMD["GEM door 🟧CHANGED\n(SecsGemGui.Net + bus shim over\nCimetrix driver - wire unchanged)"]
+        FAB[["Fabric 🟩NEW\nCamtek.Messaging bus"]]
+        GWD["Gateway door 🟧CHANGED\nToolConnect (evolved ToolGateway)"]
+        CORE["Machine core (existing)\nAOI_Main (GUI + scan engine) ·\nToolManager (state machine) · EFEM"]
     end
     CLOUD["Fleet · TSMC · MES"]
 
@@ -28,6 +39,11 @@ flowchart LR
     FAB <--> CORE
     FAB <--> GWD
     GWD <--> CLOUD
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class FAB new;
+    class GEMD,GWD changed;
 ```
 
 ### View 2 — Process view
@@ -40,15 +56,15 @@ flowchart LR
     MES["MES / analytics"]
 
     subgraph TOOL["Tool PC"]
-        subgraph TH["ToolHost (the ONE Windows service)"]
-            BUS[["Bus broker (child)"]]
-            GW["ToolConnect gateway (child)"]
-            TS["Camtek.ToolServices host (child, :5060)"]
+        subgraph TH["ToolHost 🟩NEW (the ONE Windows service)"]
+            BUS[["Bus broker 🟩NEW (child)"]]
+            GW["ToolConnect gateway 🟧CHANGED (child)"]
+            TS["Camtek.ToolServices host 🟩NEW (child, :5060)"]
         end
-        SGP["SecsGemGui.Net\nGEM logic + bus shim\n(ToolHost child, startOrder after broker)"]
-        AOI["AOI_Main (.NET FW 4.8)\nbus client - dials out, never listens\n(exception: :50055 CMM, localhost-only,\nuntil the CMM split - D-12)"]
-        FW["FalconWrapper.exe\nlegacy event hub (frozen facade,\nAOI-side bridge)"]
-        TM["ToolManager / ProductionManager\nstate machine + bus shim"]
+        SGP["SecsGemGui.Net 🟧CHANGED\nGEM logic + bus shim\n(ToolHost child, startOrder after broker)"]
+        AOI["AOI_Main 🟧CHANGED (.NET FW 4.8)\nbus client - dials out, never listens\n(exception: :50055 CMM, localhost-only,\nuntil the CMM split - D-12)"]
+        FW["FalconWrapper.exe (existing, ZERO change)\nlegacy event hub (frozen facade,\nAOI-side bridge)"]
+        TM["ToolManager / ProductionManager 🟧CHANGED\nstate machine + bus shim"]
     end
 
     HOST <-->|"SECS-II / HSMS"| SGP
@@ -61,29 +77,35 @@ flowchart LR
     GW -->|gRPC| FLEET
     GW -->|"native SDK"| TSMC
     MES <-->|"gRPC/REST :5007"| GW
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class BUS,TS new;
+    class GW,SGP,AOI,TM changed;
+    style TH fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 ### View 3 — Component view (system altitude)
 
 ```mermaid
 flowchart TB
-    subgraph BRK["Bus broker"]
+    subgraph BRK["Bus broker 🟩NEW"]
         TOP[["9 registered topics at P1a (+2 at P2-P3;\n+tool.state.replay R-R for the GEM ring, X7-7)\nscan.* · tool.* · gui.commands ·\nloader.events · production.carrier"]]
         SUBQ["Per-subscriber bounded queues\nA: NACK / B: coalesce+retained / C: drop+count"]
     end
-    subgraph GWC["ToolConnect gateway"]
-        BSRC["BusSource (WAL-before-ack)"]
-        CMDP["CommandPublisher :5007"]
-        SINKS["EventRouter - SinkDispatchers -\nFleetSink · TsmcSink"]
-        WAL["WAL spool + dead-letter"]
+    subgraph GWC["ToolConnect gateway 🟧CHANGED (evolved ToolGateway)"]
+        BSRC["BusSource 🟩NEW (WAL-before-ack)"]
+        CMDP["CommandPublisher 🟩NEW :5007"]
+        SINKS["EventRouter - SinkDispatchers -\nFleetSink · TsmcSink (existing)"]
+        WAL["WAL spool + dead-letter 🟧CHANGED (role change)"]
     end
-    subgraph AOIC["AOI_Main (drill-down: doc 02)"]
-        BA["BusAdapter"]
-        SC["ServiceClients"]
+    subgraph AOIC["AOI_Main (existing — drill-down: doc 02)"]
+        BA["BusAdapter 🟩NEW"]
+        SC["ServiceClients 🟩NEW"]
     end
-    TMC["ToolManager shim\n(tool.state publisher, stateSeq)"]
-    GEMC["GEM shim\n(commands publisher, degraded contract)"]
-    THC["ToolHost supervisor\n(job objects, health :5100, counters)"]
+    TMC["ToolManager shim 🟩NEW\n(tool.state publisher, stateSeq)"]
+    GEMC["GEM shim 🟩NEW\n(commands publisher, degraded contract)"]
+    THC["ToolHost supervisor 🟩NEW\n(job objects, health :5100, counters)"]
 
     BA <--> TOP
     TMC --> TOP
@@ -92,6 +114,13 @@ flowchart TB
     CMDP --> TOP
     THC -.-> BRK
     THC -.-> GWC
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class TOP,SUBQ,BSRC,CMDP,BA,SC,TMC,GEMC,THC new;
+    class WAL changed;
+    style BRK fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
+    style GWC fill:#FFF3E0,stroke:#EF6C00,color:#E65100;
 ```
 
 ## 1.2 System communication flows
@@ -100,11 +129,11 @@ flowchart TB
 
 ```mermaid
 sequenceDiagram
-    participant ST as AOI scan flow
-    participant J as Publisher journal (bus library)
-    participant BUS as Broker
-    participant GW as Gateway BusSource
-    participant EXT as Fleet / TSMC
+    participant ST as AOI scan flow (existing)
+    participant J as Publisher journal 🟩NEW (bus library)
+    participant BUS as Broker 🟩NEW
+    participant GW as Gateway BusSource 🟩NEW
+    participant EXT as Fleet / TSMC (existing)
 
     ST->>BUS: publish scan.announced (identifiers only - no file paths)
     Note over BUS: GEM shim receives early timing report
@@ -122,10 +151,10 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant H as Factory Host
-    participant G as GEM door (driver + logic + shim)
-    participant BUS as Broker
-    participant FP as AOI BusAdapter
+    participant H as Factory Host (existing)
+    participant G as GEM door 🟧CHANGED (driver + logic + shim)
+    participant BUS as Broker 🟩NEW
+    participant FP as AOI BusAdapter 🟩NEW
 
     H->>G: S2F41 StartManualScan (same bytes as today)
     G->>BUS: REQ gui.commands (Ttl from site E30 config, requester deadline)
@@ -141,10 +170,10 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant M as MES
-    participant GW as CommandPublisher (:5007)
-    participant BUS as Broker
-    participant TM as ToolManager
+    participant M as MES (existing/external)
+    participant GW as CommandPublisher 🟩NEW (:5007)
+    participant BUS as Broker 🟩NEW
+    participant TM as ToolManager 🟧CHANGED
 
     M->>GW: remote operation request
     GW->>GW: authenticate + authorize + audit
@@ -160,9 +189,9 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant P as All publishers
-    participant BUS as Broker
-    participant TH as ToolHost
+    participant P as All publishers (mixed)
+    participant BUS as Broker 🟩NEW
+    participant TH as ToolHost 🟩NEW
 
     P--xBUS: broker down or hung (loop-lag heartbeat missed)
     P->>P: publish keeps returning ≤1 ms - class A to journal,<br/>B/C to bounded local queues
@@ -179,7 +208,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    subgraph B["Broker process (net8, ToolHost child, startOrder 0)"]
+    subgraph B["Broker process 🟩NEW (net8, ToolHost child, startOrder 0)"]
         CONN["Connection manager\nnamed pipe per process - ACL identity -\nreader/writer SPLIT per connection"]
         REG["Topic registry\nclass + publish-ACL per topic"]
         QA["Class-A queues (bounded 128)\nfull - NACK - RESUME on drain"]
@@ -190,6 +219,11 @@ flowchart TB
         CTR["Counters - pushed to ToolHost\nevery heartbeat (survive broker death)"]
     end
     CONN --> REG --> QA & QB & QC --> WR
+
+    %% Entire broker is 🟩NEW (Camtek.Messaging.Broker) — every node below is new.
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    class CONN,REG,QA,QB,QC,WR,HB,CTR new;
+    style B fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 Key decisions: E2E-ack per **(message, declared durable-subscriber set)** — durable subscribers are a **static topic-registry property** (e.g. `scan.committed → {ToolGateway}`), so a merely *disconnected* durable subscriber (gateway restart) does **not** shrink the set — the message waits in the publisher journal and redelivers (this closes the gateway-restart silent-loss channel, R-1); only a genuinely **gateway-disabled** tool (no *declared* durable subscriber, set by signed profile) acks immediately; identity is the **OS-authenticated pipe account**, not a self-asserted `sourceName` (R-7); loop-lag heartbeat so ToolHost distinguishes *degraded* from *hung*; `quarantine: never` + `priorityClass: AboveNormal`.
@@ -203,15 +237,15 @@ Key decisions: E2E-ack per **(message, declared durable-subscriber set)** — du
 ```mermaid
 flowchart LR
     BUSG[["Bus"]]
-    subgraph G["ToolConnect (net8, ToolHost child, quarantine: never)"]
-        BS["BusSource (NEW)\nsubscribes scan.committed,\ntool.telemetry, tool.state\nDELIVER_ACK = WAL-append ONLY (R-4)\n(class-A topics; tool.state = audit copy,\nno class-A E2E semantics)\nper-sink WAL state machine (R-3)\nhealth = consumption liveness token"]
-        CP["CommandPublisher (NEW) :5007\nvalidate + authorize + audit -\npublishes tool/gui.commands"]
+    subgraph G["ToolConnect 🟧CHANGED (evolved ToolGateway; net8, ToolHost child, quarantine: never)"]
+        BS["BusSource 🟩NEW\nsubscribes scan.committed,\ntool.telemetry, tool.state\nDELIVER_ACK = WAL-append ONLY (R-4)\n(class-A topics; tool.state = audit copy,\nno class-A E2E semantics)\nper-sink WAL state machine (R-3)\nhealth = consumption liveness token"]
+        CP["CommandPublisher 🟩NEW :5007\nvalidate + authorize + audit -\npublishes tool/gui.commands"]
         ER["EventRouter (EXISTS)"]
         SD["SinkDispatchers (EXISTS)\nbounded 1000, batch"]
         FS["FleetSink (EXISTS)\n+ keepalive/deadline,\nre-register on reconnect"]
         TSK["TsmcSink (EXISTS)\nzip + native SDK shim"]
-        SP["WAL spool (role change)\npoison-only dead-letter -\noutage retries forever under quota -\ncontinuous rate-capped drain"]
-        PRX["CMM proxy (NEW)\nforwards :5007 to :50055\nmodal ops: long deadline, cap 1"]
+        SP["WAL spool 🟧CHANGED (role change)\npoison-only dead-letter -\noutage retries forever under quota -\ncontinuous rate-capped drain"]
+        PRX["CMM proxy 🟩NEW\nforwards :5007 to :50055\nmodal ops: long deadline, cap 1"]
     end
     FLEETG["Fleet.Main"]
     TSMCG["TSMC"]
@@ -221,6 +255,12 @@ flowchart LR
     SD --> TSK --> TSMCG
     MESG --> CP --> BUSG
     MESG --> PRX
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class BS,CP,PRX new;
+    class SP changed;
+    style G fill:#FFF3E0,stroke:#EF6C00,color:#E65100;
 ```
 
 **Flow — outage recovery:** sink down → messages sit in the WAL spool (DELIVER_ACK already sent on WAL append — **not** gated on sink routing, R-4) → periodic drain retries at a capped rate, oldest-first, interleaved with live traffic → a one-hour outage drains in <10 min without any restart. Each WAL entry tracks **per-sink** completion (R-3), so a message delivered to Fleet but pending for TSMC is retried only to TSMC, never re-sent to Fleet. Dead-lettering happens only for *poison* (fails while the sink is connected). At WAL quota the gateway **withholds DELIVER_ACK** (backpressure to the alarmed publisher journal) rather than dropping — loss is never taken at the sink hop (R-4).
@@ -233,25 +273,31 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    SCM["Windows SCM (auto-start,\nfailure actions)"]
-    subgraph THS["Camtek.ToolHost"]
+    SCM["Windows SCM (existing — auto-start,\nfailure actions)"]
+    subgraph THS["Camtek.ToolHost 🟩NEW"]
         SUP["ProcessSupervisor\njob objects (KILL_ON_JOB_CLOSE) -\nrestart backoff - per-child quarantine class"]
         HA["HealthAggregator :5100\nper-child probes + bus counters mirror +\nbroker delivered vs gateway processed"]
         CFG["children config + endpoint manifest\n(single source of truth - hash in fleet fingerprint)"]
     end
     SCM --> THS
-    SUP --> C1["broker (order 0, never quarantine,\nAboveNormal, pipe-lag probe)"]
-    SUP --> C2["gateway (never quarantine)"]
-    SUP --> C3["ToolServices host"]
-    SUP --> C5["SecsGemGui.Net (GEM shim,\norder after broker - R-6 handshake ordering)"]
-    SUP --> C4["DataServer · FAR python · ..."]
+    SUP --> C1["broker 🟩NEW (order 0, never quarantine,\nAboveNormal, pipe-lag probe)"]
+    SUP --> C2["gateway 🟧CHANGED (never quarantine)"]
+    SUP --> C3["ToolServices host 🟩NEW"]
+    SUP --> C5["SecsGemGui.Net 🟧CHANGED (GEM shim,\norder after broker - R-6 handshake ordering)"]
+    SUP --> C4["DataServer · FAR python · ... (existing)"]
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class SUP,HA,CFG,C1,C3 new;
+    class C2,C5 changed;
+    style THS fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 **Flow — crash containment:** child exits → log + backoff restart → `maxPerHour` exceeded → *leaf* children quarantine (siblings unaffected); **broker/gateway never quarantine** (infinite max-backoff restarts + escalating alarm — a dark fabric costs more than a 2-minute retry). A killed ToolHost tears down all children via job objects — no orphans, ever.
 
 **Graceful stop vs supervision (M-19/CC7-9).** A `SERVICE_CONTROL_STOP` sets a supervisor-level **`Stopping` latch *before* the first drain signal**; while `Stopping`, any child exit is treated as **final** — no restart, no alarm escalation — so the reverse-order drain (R-OPS-3) is not fought by the `quarantine: never` restart loop it would otherwise trigger (which would restart the broker/gateway mid-drain and then job-object-kill the fresh instance). `OnStop` = set latch → `await StopAllAsync` (reverse startOrder, per-child drain timeout) → cancel the run token. Supervision is suspended for the duration of an ordered stop.
 
-**Class design** (realized in [codeSnippets/14-toolhost.cs](codeSnippets/14-toolhost.cs)):
+**Class design** (realized in [codeSnippets/14-toolhost.cs](codeSnippets/14-toolhost.cs)) — **every class below is 🟩 NEW** (the ToolHost design; no pre-existing types shown):
 
 ```mermaid
 classDiagram
@@ -304,6 +350,9 @@ classDiagram
     ChildProcess --> RestartWindow
     ProcessSupervisor --> EndpointManifest : verified at load
     HealthAggregator --> ToolHealthReport
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    cssClass "ToolHostService,ProcessSupervisor,ChildConfig,ChildProcess,RestartWindow,EndpointManifest,HealthAggregator,ToolHealthReport" new
 ```
 
 ### 1.3.4 GEM shim (inside `SecsGemObjects` / SecsGemGui.Net — plain C#)
@@ -313,13 +362,17 @@ classDiagram
 ```mermaid
 flowchart LR
     HOSTS["Factory Host"]
-    subgraph SG["SecsGemGui.Net process"]
+    subgraph SG["SecsGemGui.Net process 🟧CHANGED (gains the shim)"]
         DRV["Cimetrix SECSGemDriver\n(native - UNTOUCHED)"]
         OBJ["SecsGemObjects E30/E87 logic\n(UNTOUCHED)"]
-        SHIM["Bus shim (NEW, C#)\nREQ gui/tool.commands -\nsubscribes scan.announced, tool.state -\ndegraded contract"]
+        SHIM["Bus shim 🟩NEW (C#)\nREQ gui/tool.commands -\nsubscribes scan.announced, tool.state -\ndegraded contract"]
     end
     BUSS[["Bus"]]
     HOSTS <--> DRV --- OBJ --- SHIM <--> BUSS
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    class SHIM new;
+    style SG fill:#FFF3E0,stroke:#EF6C00,color:#E65100;
 ```
 
 **Degraded contract — an explicit 4-state machine (resolves R-6).** The fab-facing promise is: *the fab never discovers a bus outage through mysterious host timeouts.* The shim is a state machine over **HSMS × bus**, not two booleans, and it **starts in the degraded state** — it leaves only when a bus **handshake** (a real REQ/PONG round-trip, not a `Health.IsConnected` flag read) completes:
@@ -337,7 +390,7 @@ flowchart LR
 
 **Standing (a normal P0 gate, not a design gap):** the Ttl margin `ttl + margin < E30` uses per-site E30 timeouts — a **P0 measurement of the same class the design already carries** (group-commit interval, single-instance ceilings, TsmcSink service time; §5.2 Wave 0). The shim **asserts `ttl + margin < E30` at config load and fails loudly** if a site's config violates it, so a bad number is caught at startup, never in production. The machine is fully specified; the numbers are measured at P0 like every other tool.
 
-**Class design** (realized in [codeSnippets/13-gem-shim.cs](codeSnippets/13-gem-shim.cs) — normative where the sketch diverges, per S-10/S-16):
+**Class design** (realized in [codeSnippets/13-gem-shim.cs](codeSnippets/13-gem-shim.cs) — normative where the sketch diverges, per S-10/S-16) — **every class below is 🟩 NEW**; `IGemSecsCallbacks` / `IGemTransaction` are new abstractions over the **UNTOUCHED** Cimetrix driver:
 
 ```mermaid
 classDiagram
@@ -395,6 +448,9 @@ classDiagram
     GemBusShim ..> IGemSecsCallbacks : replies async, never Wait on reader
     GemBusShim ..> IGemTransaction
     GemBusShim --> TtlConfig
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    cssClass "GemBusShim,ShimState,TransitionRing,GemCommandDisposition,GemControlState,IGemSecsCallbacks,IGemTransaction,TtlConfig" new
 ```
 
 ### 1.3.5 ToolServices host (`Camtek.ToolServices.Host`, :5060)
@@ -403,8 +459,8 @@ classDiagram
 
 ```mermaid
 flowchart LR
-    AOI2["AOI_Main ServiceClients\n(deadline + breaker + fallback)"]
-    subgraph TSH["Camtek.ToolServices.Host (net8, :5060, ToolHost child)"]
+    AOI2["AOI_Main ServiceClients 🟧CHANGED\n(new clients in existing AOI:\ndeadline + breaker + fallback)"]
+    subgraph TSH["Camtek.ToolServices.Host 🟩NEW (net8, :5060, ToolHost child)"]
         KES["Kestrel gRPC host\nloopback-bound, service-account ACL"]
         REG["Module registry\none module = one Camtek.API contract"]
         M1["SystemLogger module (pilot)"]
@@ -412,8 +468,16 @@ flowchart LR
         HP["Health probe\nper-module serving status"]
     end
     AOI2 -->|"gRPC :5060"| KES --> REG --> M1 & M2
-    HP -.-> TH2["ToolHost :5100"]
+    HP -.-> TH2["ToolHost :5100 🟩NEW"]
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class KES,REG,M1,M2,HP,TH2 new;
+    class AOI2 changed;
+    style TSH fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
+
+> **Every class below is 🟩 NEW** — the ToolServices host design.
 
 ```mermaid
 classDiagram
@@ -439,6 +503,9 @@ classDiagram
     ToolServicesHost --> ModuleRegistry
     ModuleRegistry "1" *-- "n" IServiceModule
     IServiceModule <|.. SystemLoggerModule
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    cssClass "ToolServicesHost,IServiceModule,SystemLoggerModule,ModuleRegistry" new
 ```
 
 **Flow — request:** consumer proxy (3 s deadline) → Kestrel → module → response; module down ≠ host down (per-module serving status); host down → consumer's breaker opens → per-service fallback (e.g. logging falls back to a local file — never blocks, never loses). **Contracts:** loopback-bound + service-account ACL (not externally reachable — external callers come only through ToolConnect); one `Camtek.API.*` contract per module, additive-only versioning; ToolHost child (normal quarantine class — a leaf, unlike broker/gateway); health probed per module into :5100. **Deliberately thin:** the host is Kestrel boilerplate by design — the per-service design weight lives in each module's contract + result-equivalence tests (Lane B gate), not in the host.

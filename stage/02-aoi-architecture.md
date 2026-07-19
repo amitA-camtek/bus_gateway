@@ -7,6 +7,14 @@
 
 ---
 
+> **Diagram legend — new vs existing** (applies to the flowcharts in this doc): 🟩 **NEW** =
+> new class/component built by this program · 🟧 **CHANGED** = existing component modified
+> (e.g. `frmProduction` → thin shell) · 🟥 **RETIRED** = existing component removed · plain /
+> untagged = unchanged or external. Sequence-diagram **participants** and class-diagram
+> **classes** are tagged too (same scheme, in the participant/class label or a caption above the
+> diagram); actor-only participants stay plain. Class-diagram colour is applied where the
+> renderer supports classDiagram `classDef`. Authoritative accounting: [04-impact-analysis.md](04-impact-analysis.md).
+
 ## 2.1 Internal architecture — today vs target
 
 **Today:** communication concerns are smeared across an invisible Form (`frmProduction`: 4 COM wrappers + ~23 `Fire*` methods across ~80 call sites/12 files, each with its own Sim/VVR short-circuit — see the polarity note in §2.2), `frmScanTab` (result publishing + gateway push), per-wrapper ad-hoc UI marshaling, a hosted gRPC server (:50055), and a reentrant `DoEvents` pump primitive.
@@ -16,15 +24,15 @@
 ```mermaid
 flowchart TB
     subgraph AOIN["AOI_Main internals (target)"]
-        MCN["MainContext.Instance\n+ IBus + BusAdapter + ServiceClients\n+ consolidated modules"]
-        BAN["BusAdapter (plain class)\nsubscriptions - Ttl gates - Sim/VVR gate -\nUiMarshaller - req/reply server - publish facade"]
-        UMN["UiMarshaller (plain class)\nBeginInvoke-only - shutdown-aware"]
-        TSR["ToolStateReactions (testable class)\nstateSeq-ordered state application"]
-        FPN["frmProduction (thin shell)\ndelegates to ToolStateReactions"]
-        STN["frmScanTab (role unchanged)\npublishes via BusAdapter facade"]
-        SCN["ServiceClients\ngRPC proxies behind Connect seam"]
-        CONSN["Consolidated modules (lane C)\nRobotUI · census-passing helpers"]
-        KWN["KEEP wrappers (lane D)\nMachine · Efem-cmd · S12 + telemetry"]
+        MCN["MainContext.Instance 🟧CHANGED\n+ IBus + BusAdapter + ServiceClients\n+ consolidated modules"]
+        BAN["BusAdapter 🟩NEW (plain class)\nsubscriptions - Ttl gates - Sim/VVR gate -\nUiMarshaller - req/reply server - publish facade"]
+        UMN["UiMarshaller 🟩NEW (plain class)\nBeginInvoke-only - shutdown-aware"]
+        TSR["ToolStateReactions 🟩NEW (testable class)\nstateSeq-ordered state application"]
+        FPN["frmProduction 🟧CHANGED (thin shell)\ndelegates to ToolStateReactions"]
+        STN["frmScanTab 🟧CHANGED (role unchanged)\npublishes via BusAdapter facade"]
+        SCN["ServiceClients 🟩NEW\ngRPC proxies behind Connect seam"]
+        CONSN["Consolidated modules 🟧CHANGED (lane C)\nRobotUI · census-passing helpers"]
+        KWN["KEEP wrappers (lane D, existing)\nMachine · Efem-cmd · S12 + telemetry"]
     end
 
     MCN --> BAN --> UMN
@@ -34,13 +42,18 @@ flowchart TB
     STN --> BAN
     STN --> SCN
     STN --> KWN
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class BAN,UMN,TSR,SCN new;
+    class MCN,FPN,STN,CONSN changed;
 ```
 
 What disappears from AOI_Main: ~5–7 singleton processes' connections, the `:50055` listener (**loopback-bound today**, `clsCMM.cs:35` — contained via the gateway proxy as EOL-runtime hygiene, then later deleted; it is *not* the external door — that is ToolGateway :5005 on `0.0.0.0`), the `ToolApiPublisher` push, three COM wrapper classes + the raw `CFalconEvents` ref, and per migrated edge the `*CB` sink registrations.
 
 ### Class design — the new AOI-side components together
 
-(Members realized in [codeSnippets/](codeSnippets/) 05–08 and 11; component contracts in §2.2–§2.5 below.)
+(Members realized in [codeSnippets/](codeSnippets/) 05–08 and 11; component contracts in §2.2–§2.5 below.) — **every class below is 🟩 NEW except `frmProduction` (🟧 CHANGED — existing form reduced to a thin shell).**
 
 ```mermaid
 classDiagram
@@ -132,6 +145,11 @@ classDiagram
     ISystemLogger <|.. LocalFileLoggerFallback
     SystemLoggerGrpcProxy --> CircuitBreaker
     SystemLoggerGrpcProxy --> LocalFileLoggerFallback : degraded
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    cssClass "BusAdapter,UiMarshaller,CommandSerializationGate,ToolStateReactions,ToolStateEvent,IGuiStateSink,IJobStateSink,SystemLoggerConnector,ISystemLogger,SystemLoggerGrpcProxy,SystemLoggerRotProxy,LocalFileLoggerFallback,CircuitBreaker,MonotonicClock" new
+    cssClass "frmProduction" changed
 ```
 
 ## 2.2 Component: BusAdapter
@@ -143,7 +161,7 @@ classDiagram
 ```mermaid
 flowchart TB
     BUSA[["Bus"]]
-    subgraph BA["BusAdapter"]
+    subgraph BA["BusAdapter 🟩NEW (all internals below are new)"]
         SUBA["Subscriptions"]
         T1["Ttl gate #1 (dispatcher,\nmonotonic clock)"]
         MODE["Sim/VVR gate (central)"]
@@ -153,20 +171,24 @@ flowchart TB
         SRV["Request/reply server + reply cache"]
         PUB["Publish facade"]
     end
-    UIT["UI thread handlers"]
+    UIT["UI thread handlers (existing)"]
 
     BUSA --> SUBA --> T1 --> MODE --> SER --> UM --> T2 --> UIT
     UIT --> SRV --> BUSA
     PUB --> BUSA
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    class SUBA,T1,MODE,SER,UM,T2,SRV,PUB new;
+    style BA fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 ### Flow — `gui.commands` round-trip (deadlock-free by construction)
 
 ```mermaid
 sequenceDiagram
-    participant BUS as Bus (pool thread)
-    participant BA as BusAdapter
-    participant UI as UI thread
+    participant BUS as Bus 🟩NEW (pool thread)
+    participant BA as BusAdapter 🟩NEW
+    participant UI as UI thread (existing)
 
     BUS->>BA: deliver REQ StartManualScan (Ttl)
     BA->>BA: gate #1 - Ttl (monotonic) + Sim/VVR + serialization
@@ -276,10 +298,10 @@ Pre-fabric absorbed modules (lane C) marshal their COM callbacks through this sa
 
 ```mermaid
 sequenceDiagram
-    participant BA as BusAdapter
-    participant TM as ToolManager
-    participant BUS as Bus
-    participant R as ToolStateReactions
+    participant BA as BusAdapter 🟩NEW
+    participant TM as ToolManager 🟧CHANGED
+    participant BUS as Bus 🟩NEW
+    participant R as ToolStateReactions 🟩NEW
 
     BA->>BA: subscribe tool.state (events buffered from here)
     BA->>TM: fetch snapshot (COM today - retained class-B post-P3)
@@ -376,18 +398,23 @@ The failure policy is not optional: without deadlines + breaker + fallback, the 
 
 ```mermaid
 flowchart LR
-    subgraph ST["frmScanTab (role unchanged)"]
+    subgraph ST["frmScanTab (existing hooks — role unchanged)"]
         H1["scan start\n(identifiers known)"]
         H2["post-CopyScanResults hooks\n(~:1888-1902, :10162 - results at stable path)"]
     end
-    BA2["BusAdapter.Publish\n(≤1 ms facade)"]
-    OLD["ToolApiPublisher - :5005\n(LEGACY - dual-run P1a,\nretired P1b)"]
+    BA2["BusAdapter.Publish 🟩NEW\n(≤1 ms facade)"]
+    OLD["ToolApiPublisher - :5005 🟥RETIRED\n(LEGACY - dual-run P1a,\nretired P1b)"]
     BUS2[["Bus"]]
 
     H1 -->|"scan.announced\n(NO file paths)"| BA2
     H2 -->|"scan.committed\n(ResultsPath - stable)"| BA2
     H2 -.->|"shadow compare during P1a"| OLD
     BA2 --> BUS2
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef retire fill:#FFCDD2,stroke:#C62828,color:#B71C1C;
+    class BA2 new;
+    class OLD retire;
 ```
 
 The early/late results race is closed **structurally**: `scan.announced` carries identifiers only (a mis-wired consumer has no path to read half-copied files); `scan.committed` fires only after the copy to the stable path — the same ordering today's gateway push relies on, now enforced by the payload contract.
@@ -407,9 +434,9 @@ _busAdapter.Publish(Topics.ScanCommitted, new ScanCommittedPayload
 
 ```mermaid
 sequenceDiagram
-    participant INIT as clsInitAOI
-    participant BA as BusAdapter
-    participant BUS as Bus
+    participant INIT as clsInitAOI 🟧CHANGED
+    participant BA as BusAdapter 🟩NEW
+    participant BUS as Bus 🟩NEW
 
     INIT->>BUS: BusFactory.Connect("AOI_Main") - NON-blocking, jittered retry
     Note over BUS: broker absent - AOI never hangs: degraded banner ≤ N s,<br/>AOI-side alarm, EnsureBusRunning self-heal (SCM start,<br/>then ToolHost child-restart API)

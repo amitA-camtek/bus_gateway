@@ -7,6 +7,15 @@
 
 ---
 
+> **Diagram legend — new vs existing** (applies to the §7.2 architecture flowchart): 🟩 **NEW**
+> = new build · 🟧 **CHANGED** = existing component reworked (e.g. the WAL spool's role change)
+> · plain / untagged = existing (reused) or external. Per §7.1 the reused sink mechanics
+> (EventRouter, SinkDispatchers, FleetSink, TsmcSink) keep their "EXISTS" labels even though
+> their contracts are reworked. The §7.3 class diagram **is** now tagged — reused classes carry
+> the `<<exists>>` stereotype (🟧) already present, and the new classes are coloured 🟩 NEW
+> (where the renderer supports classDiagram `classDef`). The §7.4 WAL state-machine stays
+> untagged (states, not components). Authoritative accounting: [04-impact-analysis.md](04-impact-analysis.md).
+
 ## 7.1 Responsibility and altitude
 
 ToolConnect is the tool's **only door besides GEM**: events out (Fleet/TSMC), authorized commands in (MES/CMM). It evolves today's ToolGateway: the **sink-side mechanics exist with tests** (EventRouter, SinkDispatchers, FleetSink, TsmcSink — bounded-1000/batch-10/Wait channels, ~90 xUnit tests). **The reuse is of mechanics, not signatures** — the class design below changes every "exists" component's contract (`RouteAsync(WalEntry)` replaces `Publish(EventMessage)`; `MarkSinkDone` replaces the `FailedMessages` path), so the existing test suite is reworked, not inherited (FEA7-2). New builds: a **BusSource** (replacing the :5005 gRPC intake), a **WAL spool with a per-entry/per-sink state machine** (replacing the failed-messages spool), a **CommandPublisher** on :5007, a **CMM proxy** that contains the :50055 surface, and **Fleet registration wiring** (`RegisterToolAsync` exists but is never invoked today — registration must be built, not merely re-registered).
@@ -18,17 +27,17 @@ Process: `ToolConnect.exe`, net8-era — **ships on .NET 10 LTS** per [04 §4.4]
 ```mermaid
 flowchart TB
     BUS[["Bus (named pipe)"]]
-    subgraph TC["ToolConnect.exe (net8, ToolHost child, quarantine: never)"]
-        BS["BusSource\nsubscribes scan.committed · tool.telemetry · tool.state\ndedup (source,epoch,topic,seq) - WAL append - persist high-water - DELIVER_ACK"]
-        WAL["WAL spool\nper-entry per-sink state machine\natomic append (tmp+rename)\nquota gauge"]
-        DR["Drain scheduler\noldest-first, rate-capped,\nlive-vs-drain arbitration"]
+    subgraph TC["ToolConnect.exe 🟧CHANGED (evolved ToolGateway; net8, ToolHost child, quarantine: never)"]
+        BS["BusSource 🟩NEW\nsubscribes scan.committed · tool.telemetry · tool.state\ndedup (source,epoch,topic,seq) - WAL append - persist high-water - DELIVER_ACK"]
+        WAL["WAL spool 🟧CHANGED (role change)\nper-entry per-sink state machine\natomic append (tmp+rename)\nquota gauge"]
+        DR["Drain scheduler 🟩NEW\noldest-first, rate-capped,\nlive-vs-drain arbitration"]
         ER["EventRouter (EXISTS)"]
         SD["SinkDispatchers (EXISTS)\nbounded 1000, batch"]
         FS["FleetSink (EXISTS +)\nkeepalive/deadline, re-register"]
         TS["TsmcSink (EXISTS)\nzip + native SDK shim"]
-        CP["CommandPublisher :5007 (NEW)\nmTLS - authz - audit - REQ to bus"]
-        PRX["CMM proxy (NEW)\n:5007 CMM surface to loopback :50055"]
-        HB["Health\nconsumption-liveness token to ToolHost"]
+        CP["CommandPublisher :5007 🟩NEW\nmTLS - authz - audit - REQ to bus"]
+        PRX["CMM proxy 🟩NEW\n:5007 CMM surface to loopback :50055"]
+        HB["Health 🟩NEW\nconsumption-liveness token to ToolHost"]
     end
     FLEET["Fleet.Main"]
     TSMC["TSMC cloud"]
@@ -40,6 +49,12 @@ flowchart TB
     MES -->|mTLS| CP --> BUS
     MES -->|mTLS| PRX -->|"loopback gRPC"| AOI[":50055 in AOI_Main (EOL runtime, loopback-bound)"]
     FS & TS -->|"per-sink completion"| WAL
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    class BS,DR,CP,PRX,HB new;
+    class WAL changed;
+    style TC fill:#FFF3E0,stroke:#EF6C00,color:#E65100;
 ```
 
 The decisive structural change from the sketch: **routing consumes from the WAL, never from the bus handler**. The bus handler's only jobs are dedup, WAL append, high-water persist, and returning (which releases DELIVER_ACK). Everything downstream — routing, sink dispatch, retries, drains — reads WAL entries and reports per-sink completion back to the WAL-state actor. A Fleet or TSMC outage therefore piles up in the **gateway's WAL**, never back onto the bus or into AOI's publisher journal (R-4).
@@ -55,6 +70,10 @@ The decisive structural change from the sketch: **routing consumes from the WAL,
 The per-tool storm aggregate is **10/s × N sources (N ≈ 6: AOI_Main, ToolManager, GEM shim, ToolConnect, ToolServices, broker) = 60 msg/s** — a FleetSink P0 ceiling of ≥ 60 msg/s (or gateway-egress aggregate coalescing) is the acceptance rule (§6.9).
 
 ## 7.3 Class design
+
+> **New vs existing:** classes marked `<<exists>>` (EventRouter, SinkDispatcher, FleetSink,
+> TsmcSink) are 🟧 reused today's ToolGateway sink mechanics (contracts reworked per §7.1);
+> **every other class is 🟩 NEW**.
 
 ```mermaid
 classDiagram
@@ -175,6 +194,11 @@ classDiagram
     TsmcSink ..> WalSpool : MarkSinkDone
     CommandPublisher --> IAuditSink
     CmmProxy --> CommandPublisher : shares 5007 host + authn
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    classDef exists fill:#ECEFF1,stroke:#607D8B,color:#37474F;
+    cssClass "BusSource,DedupIndex,WalSpool,WalEntry,SinkLeg,WalEntryState,SinkState,DrainScheduler,ISink,CommandPublisher,CmmProxy,IAuditSink" new
+    cssClass "EventRouter,SinkDispatcher,FleetSink,TsmcSink" exists
 ```
 
 ## 7.4 The WAL entry state machine (normative — resolves R-3)

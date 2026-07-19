@@ -29,6 +29,11 @@ flowchart TB
     CUSTC -->|"COM CB"| N1
 ```
 
+> **This is the *today* baseline — every component shown already exists; nothing here is new.**
+> New / changed / retired components are introduced from [01-system-architecture.md](01-system-architecture.md)
+> onward and are colour-tagged there (🟩 NEW · 🟧 CHANGED · 🟥 RETIRED); the authoritative
+> accounting is [04-impact-analysis.md](04-impact-analysis.md).
+
 Plus 3 Windows services per tool (DataServer, RMS tool service, FAR supervisor), the GEM stack (C# `SecsGemObjects` over the native Cimetrix driver — the fab-qualified wire), and file/DB channels.
 
 ### The seven verified pain points

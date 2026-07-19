@@ -7,6 +7,14 @@
 
 ---
 
+> **Diagram legend — new vs existing** (applies to the component "Block" diagrams in this doc):
+> 🟩 **NEW** = new component built by this program · 🟧 **CHANGED** = existing component
+> modified or relocated in-proc · 🟥 **RETIRED** = existing component removed · plain / untagged
+> = unchanged or external. The lane decision-tree (§3.0) stays untagged (routing outcomes, not
+> components), but the **sequence-diagram participants are now tagged** (same scheme, in the
+> participant label); actor-only participants (Census, Track C team) stay plain. Authoritative
+> accounting: [04-impact-analysis.md](04-impact-analysis.md).
+
 ## 3.0 Primer — the bus and the lanes, plainly
 
 **The lanes are a sorting rule for wires; the bus is one of the destinations.** Today every link is COM point-to-point wiring with three hidden problems (undefined failure behavior, untestable, adding a listener edits the sender). The redesign asks one question about every wire — *what is its shape?* — and the answer sorts it:
@@ -36,12 +44,12 @@ Real examples of the question at work:
 
 ```mermaid
 sequenceDiagram
-    participant AOI as AOI_Main
-    participant D as Lane D - MachineSrv (COM)
-    participant B as Lane B - JobProvider (gRPC)
-    participant BUS as Lane A - Bus
-    participant C as Lane C - RobotUI (in-proc)
-    participant GW as Gateway
+    participant AOI as AOI_Main 🟧CHANGED
+    participant D as Lane D - MachineSrv (COM, existing/KEEP)
+    participant B as Lane B - JobProvider 🟧CHANGED (gRPC)
+    participant BUS as Lane A - Bus 🟩NEW
+    participant C as Lane C - RobotUI 🟧CHANGED (in-proc)
+    participant GW as Gateway 🟧CHANGED
 
     AOI->>B: get recipe (question/answer, 3 s deadline, fail-fast)
     AOI->>D: move stage, handle wafer (COM - untouched)
@@ -76,11 +84,11 @@ Every COM edge migrates through the same reversible sequence:
 
 ```mermaid
 sequenceDiagram
-    participant P as Publisher (e.g. ToolManager)
-    participant COM as Legacy COM CB path
-    participant BUS as Bus topic
-    participant S as Subscriber
-    participant CMP as Shadow comparator
+    participant P as Publisher 🟧CHANGED (e.g. ToolManager)
+    participant COM as Legacy COM CB path 🟥RETIRED
+    participant BUS as Bus topic 🟩NEW
+    participant S as Subscriber (existing)
+    participant CMP as Shadow comparator 🟩NEW
 
     Note over P,S: Step 1 - DUAL-PUBLISH (bus path is shadow-only)
     P->>COM: legacy callback (authoritative)
@@ -170,19 +178,23 @@ public static readonly Topic ToolTelemetry =
 
 ```mermaid
 flowchart LR
-    subgraph A2["AOI_Main"]
+    subgraph A2["AOI_Main (existing)"]
         CALL["Call sites (unchanged)"]
-        SEAM["Connector.Instance seam\nper-service flag grpc/rot"]
-        PRX["Typed proxy\ndeadline + breaker + fallback"]
+        SEAM["Connector.Instance seam 🟩NEW\nper-service flag grpc/rot"]
+        PRX["Typed proxy 🟩NEW\ndeadline + breaker + fallback"]
     end
-    subgraph H2["Camtek.ToolServices (net8, :5060)"]
-        MODS["Service modules\n(DataServer module pattern)"]
+    subgraph H2["Camtek.ToolServices 🟩NEW (net8, :5060)"]
+        MODS["Service modules 🟩NEW\n(DataServer module pattern)"]
     end
-    OTHER["Non-AOI consumers\n(GEM/TAC stack incl. native C++)"]
-    FAC["COM-visible compatibility facade\n(wraps the gRPC client)"]
+    OTHER["Non-AOI consumers (existing)\n(GEM/TAC stack incl. native C++)"]
+    FAC["COM-visible compatibility facade 🟩NEW\n(wraps the gRPC client)"]
 
     CALL --> SEAM --> PRX <-->|"gRPC localhost"| MODS
     OTHER --> FAC <--> MODS
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    class SEAM,PRX,MODS,FAC new;
+    style H2 fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 ### The three verified seam limits (why "just swap Connect()" is not enough)
@@ -195,10 +207,10 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant CEN as Census
-    participant C as Caller
-    participant P as Proxy
-    participant H as ToolServices host
+    participant CEN as Census (actor)
+    participant C as Caller (existing)
+    participant P as Proxy 🟩NEW
+    participant H as ToolServices host 🟩NEW
 
     CEN->>CEN: pilot = first service with AOI-only fan-in,<br/>flat interface, no live-object params<br/>(SystemLogger leading - JobProvider DISQUALIFIED)
     C->>P: service call (same types as today)
@@ -260,23 +272,28 @@ Code for the seam + failure policy: [02-aoi-architecture.md §2.5](02-aoi-archit
 ```mermaid
 flowchart LR
     subgraph BEF["Before - 3 processes"]
-        A1["AOI_Main"] <-->|"COM via ROT"| S1["Singleton exe\n(ComSingletonHolder clone)"]
+        A1["AOI_Main"] <-->|"COM via ROT"| S1["Singleton exe 🟥RETIRED\n(ComSingletonHolder clone)"]
         S1 <-->|COM| H1["Hardware server"]
     end
     subgraph AFT["After - 2 processes"]
         subgraph A2C["AOI_Main"]
-            M2["Module in-proc\ncallbacks = .NET events\nSINGLE-STA rule"]
+            M2["Module in-proc 🟧CHANGED\ncallbacks = .NET events\nSINGLE-STA rule"]
         end
         M2 <-->|"COM (unchanged) or\nloader.events post-P2"| H2C["Hardware server"]
     end
+
+    classDef changed fill:#FFE0B2,stroke:#EF6C00,color:#E65100;
+    classDef retire fill:#FFCDD2,stroke:#C62828,color:#B71C1C;
+    class M2 changed;
+    class S1 retire;
 ```
 
 ### Flow — absorption (5 steps, flag-reversible)
 
 ```mermaid
 sequenceDiagram
-    participant T as Track C team
-    participant M as Module (e.g. RobotUI)
+    participant T as Track C team (actor)
+    participant M as Module 🟧CHANGED (e.g. RobotUI)
 
     T->>M: 1. reference the assembly directly (AOI_Main.csproj)
     T->>M: 2. seam returns in-proc instance (flag inproc/rot = rollback)
@@ -353,27 +370,31 @@ Census **failed** for both (GEM/TAC-stack and native-C++ consumers). **Nothing h
 
 ```mermaid
 flowchart LR
-    subgraph D["KEEP-lane instruments"]
-        TEL["Wrapper call-frequency telemetry\n(the chattiness evidence base -\nfeeds every lane's gate)"]
-        RR["GEM record-replay harness\nhost-visible diff per release"]
-        REG["Contract register\nowner - freeze reason - exit trigger -\nlast-reviewed date, per kept interface"]
-        BRG["FalconWrapper bridge (AOI-side)\nBusAdapter republishes - the exe is\nNEVER modified, never a bus client"]
+    subgraph D["KEEP-lane instruments (all 🟩NEW — additive)"]
+        TEL["Wrapper call-frequency telemetry 🟩NEW\n(the chattiness evidence base -\nfeeds every lane's gate)"]
+        RR["GEM record-replay harness 🟩NEW\nhost-visible diff per release"]
+        REG["Contract register 🟩NEW\nowner - freeze reason - exit trigger -\nlast-reviewed date, per kept interface"]
+        BRG["FalconWrapper bridge 🟩NEW (AOI-side)\nBusAdapter republishes - the exe is\nNEVER modified, never a bus client"]
     end
-    COMK["Kept boundaries"]
+    COMK["Kept boundaries (existing, unchanged)"]
     TEL --- COMK
     RR --- COMK
     REG --- COMK
     BRG --- COMK
+
+    classDef new fill:#C8E6C9,stroke:#2E7D32,color:#1B5E20;
+    class TEL,RR,REG,BRG new;
+    style D fill:#F1F8E9,stroke:#2E7D32,color:#1B5E20;
 ```
 
 ### Flow — customer automation through the frozen façade
 
 ```mermaid
 sequenceDiagram
-    participant CUST as Customer automation
-    participant FW as FalconWrapper.exe (ZERO change)
-    participant W as ExternalControlCbUiWrapper (as today)
-    participant BA as BusAdapter
+    participant CUST as Customer automation (existing)
+    participant FW as FalconWrapper.exe (existing, ZERO change)
+    participant W as ExternalControlCbUiWrapper (existing, as today)
+    participant BA as BusAdapter 🟩NEW
 
     CUST->>FW: IFalconExternalControl.StartManualScan (COM contract unchanged)
     FW->>W: COM callback into AOI_Main (exactly as today)
