@@ -45,8 +45,8 @@ flowchart LR
             GW["ToolConnect gateway (child)"]
             TS["Camtek.ToolServices host (child, :5060)"]
         end
-        SGP["SecsGemGui.Net\nGEM logic + bus shim"]
-        AOI["AOI_Main (.NET FW 4.8)\nbus client - dials out, never listens"]
+        SGP["SecsGemGui.Net\nGEM logic + bus shim\n(ToolHost child, startOrder after broker)"]
+        AOI["AOI_Main (.NET FW 4.8)\nbus client - dials out, never listens\n(exception: :50055 CMM, localhost-only,\nuntil the CMM split - D-12)"]
         FW["FalconWrapper.exe\nlegacy event hub (frozen facade,\nAOI-side bridge)"]
         TM["ToolManager / ProductionManager\nstate machine + bus shim"]
     end
@@ -68,7 +68,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph BRK["Bus broker"]
-        TOP[["9 registered topics at P1a (+2 at P2-P3)\nscan.* · tool.* · gui.commands ·\nloader.events · production.carrier"]]
+        TOP[["9 registered topics at P1a (+2 at P2-P3;\n+tool.state.replay R-R for the GEM ring, X7-7)\nscan.* · tool.* · gui.commands ·\nloader.events · production.carrier"]]
         SUBQ["Per-subscriber bounded queues\nA: NACK / B: coalesce+retained / C: drop+count"]
     end
     subgraph GWC["ToolConnect gateway"]
@@ -88,8 +88,7 @@ flowchart TB
     BA <--> TOP
     TMC --> TOP
     GEMC <--> TOP
-    TOP --> BSRC --> SINKS
-    BSRC --> WAL
+    TOP --> BSRC --> WAL --> SINKS
     CMDP --> TOP
     THC -.-> BRK
     THC -.-> GWC
@@ -113,7 +112,8 @@ sequenceDiagram
     J->>BUS: pump publishes after durable
     BUS->>GW: deliver
     GW->>GW: WAL spool append (durable ownership FIRST)
-    GW-->>BUS: DELIVER_ACK - publisher journal appends ack-tombstone
+    GW-->>BUS: DELIVER_ACK (a function of the WAL append only, R-4)
+    BUS-->>J: E2E_ACK - every DECLARED durable subscriber acked (R-1) -<br/>journal appends the ack-tombstone
     GW->>EXT: Fleet gRPC + TSMC zip upload (poison-only dead-letter)
     Note over J,GW: any process down at any hand-off - the message waits<br/>in a durable store and replays. No silent loss anywhere
 ```
@@ -204,22 +204,21 @@ Key decisions: E2E-ack per **(message, declared durable-subscriber set)** — du
 flowchart LR
     BUSG[["Bus"]]
     subgraph G["ToolConnect (net8, ToolHost child, quarantine: never)"]
-        BS["BusSource (NEW)\nsubscribes scan.committed,\ntool.telemetry, tool.state\nDELIVER_ACK = WAL-append ONLY (R-4)\nper-sink WAL state machine (R-3)\nhealth = consumption liveness token"]
+        BS["BusSource (NEW)\nsubscribes scan.committed,\ntool.telemetry, tool.state\nDELIVER_ACK = WAL-append ONLY (R-4)\n(class-A topics; tool.state = audit copy,\nno class-A E2E semantics)\nper-sink WAL state machine (R-3)\nhealth = consumption liveness token"]
         CP["CommandPublisher (NEW) :5007\nvalidate + authorize + audit -\npublishes tool/gui.commands"]
         ER["EventRouter (EXISTS)"]
         SD["SinkDispatchers (EXISTS)\nbounded 1000, batch"]
         FS["FleetSink (EXISTS)\n+ keepalive/deadline,\nre-register on reconnect"]
         TSK["TsmcSink (EXISTS)\nzip + native SDK shim"]
-        SP["WAL spool (role change)\npoison-only dead-letter -\noutage retries forever under quota -\nperiodic 60 s drain"]
+        SP["WAL spool (role change)\npoison-only dead-letter -\noutage retries forever under quota -\ncontinuous rate-capped drain"]
         PRX["CMM proxy (NEW)\nforwards :5007 to :50055\nmodal ops: long deadline, cap 1"]
     end
     FLEETG["Fleet.Main"]
     TSMCG["TSMC"]
     MESG["MES / CMM"]
 
-    BUSG --> BS --> ER --> SD --> FS --> FLEETG
+    BUSG --> BS --> SP --> ER --> SD --> FS --> FLEETG
     SD --> TSK --> TSMCG
-    BS --> SP
     MESG --> CP --> BUSG
     MESG --> PRX
 ```
@@ -244,10 +243,13 @@ flowchart TB
     SUP --> C1["broker (order 0, never quarantine,\nAboveNormal, pipe-lag probe)"]
     SUP --> C2["gateway (never quarantine)"]
     SUP --> C3["ToolServices host"]
+    SUP --> C5["SecsGemGui.Net (GEM shim,\norder after broker - R-6 handshake ordering)"]
     SUP --> C4["DataServer · FAR python · ..."]
 ```
 
 **Flow — crash containment:** child exits → log + backoff restart → `maxPerHour` exceeded → *leaf* children quarantine (siblings unaffected); **broker/gateway never quarantine** (infinite max-backoff restarts + escalating alarm — a dark fabric costs more than a 2-minute retry). A killed ToolHost tears down all children via job objects — no orphans, ever.
+
+**Graceful stop vs supervision (M-19/CC7-9).** A `SERVICE_CONTROL_STOP` sets a supervisor-level **`Stopping` latch *before* the first drain signal**; while `Stopping`, any child exit is treated as **final** — no restart, no alarm escalation — so the reverse-order drain (R-OPS-3) is not fought by the `quarantine: never` restart loop it would otherwise trigger (which would restart the broker/gateway mid-drain and then job-object-kill the fresh instance). `OnStop` = set latch → `await StopAllAsync` (reverse startOrder, per-child drain timeout) → cancel the run token. Supervision is suspended for the duration of an ordered stop.
 
 **Class design** (realized in [codeSnippets/14-toolhost.cs](codeSnippets/14-toolhost.cs)):
 
@@ -306,7 +308,7 @@ classDiagram
 
 ### 1.3.4 GEM shim (inside `SecsGemObjects` / SecsGemGui.Net — plain C#)
 
-**Responsibility:** the only change at the GEM door. Publishes host commands to the bus; subscribes to state/results for host event reports. The Cimetrix driver and E30/E87 logic are untouched — host wire behavior is byte-identical.
+**Responsibility:** the only change at the GEM door. Publishes host commands to the bus; subscribes to state/results for host event reports. The Cimetrix driver and E30/E87 logic are untouched — host wire behavior is byte-identical **for events and state**; the async host-command *accept* path shifts to HCACK=4 (see below, X7-8), a host-visible change carried in the P4/P5 re-qual budget.
 
 ```mermaid
 flowchart LR
@@ -325,13 +327,13 @@ flowchart LR
 | HSMS | Bus | Shim behavior |
 |---|---|---|
 | up | up (handshake done) | Normal. Host commands → REQ `gui/tool.commands`; **REMOTE is host/operator-granted** (the shim never auto-grants). |
-| up | **down/hung** | Host-visible control state → **ONLINE-LOCAL** + dedicated alarm CEID; REMOTE refused; a host command is answered with a deliberate **HCACK denial**, *decided on the reader thread and returned immediately* — never a `Task.Wait` that parks the SECS reader for ~Ttl (the exact timeout the contract forbids). The command is completed **asynchronously off the reader thread** within the E30 window. |
+| up | **down/hung** | Host-visible control state → **ONLINE-LOCAL** + dedicated alarm CEID; REMOTE refused; a host command is answered with a deliberate **HCACK denial**, *decided on the reader thread and returned immediately* — never a `Task.Wait` that parks the SECS reader for ~Ttl (the exact timeout the contract forbids). |
 | down | up | Bus fine, no host — nothing to report; shim idle. |
 | down | down | Both alarms; recovery re-handshakes bus, host re-selects. |
 
-**"Bus available" is the composite signal** — connected AND heartbeat-fresh AND loop-lag < L — not the raw socket flag (a hung broker holds the pipe open). On recovery the shim returns to **ONLINE-LOCAL and lets the host re-grant REMOTE** (auto-promotion to REMOTE is a compliance bug). `SecsGemGui.Net` is a **ToolHost-supervised child** with startOrder > broker (it was previously unmanaged, so its handshake had no ordering guarantee).
+**The async-accept path uses HCACK=4, not HCACK=0-on-completion (X7-8 — a host-visible change, so scoped honestly).** A normal-state host command that must complete off the reader thread is answered with **`eCmdPerformLater` (HCACK=4)** — "accepted, will be performed later" — with the true outcome delivered as a **named completion CEID**; `IGemTransaction.CompleteHcack` *raises that event*. This is what the untouched Cimetrix driver actually offers: its `IE30CommandCB.CommandCalled([in,out] eCommandResults)` derives HCACK from the value written **before the callback returns** — there is no deferred-reply handle, so "accepted, completed async as HCACK=0" is impossible without parking the reader (the thing R-6 forbids). Consequently the **"byte-identical host wire" claim holds for events and state but *not* for host commands** — the accept path changes the HCACK sequence and is therefore in the **P4/P5 host-requalification budget** ([04 §4.2](04-impact-analysis.md)), not the untouched core. The *denial* path is unchanged (reader-thread HCACK denial). **"Bus available" is the composite signal** — connected AND heartbeat-fresh AND loop-lag < L — not the raw socket flag (a hung broker holds the pipe open). On recovery the shim returns to **ONLINE-LOCAL and lets the host re-grant REMOTE** (auto-promotion to REMOTE is a compliance bug). `SecsGemGui.Net` is a **ToolHost-supervised child** with startOrder > broker (it was previously unmanaged, so its handshake had no ordering guarantee).
 
-**No missed E30 transitions (resolves the class-B gap, DI-8).** `tool.state` stays class-B/retained for the *current-state* consumers, but the GEM shim additionally subscribes to a small **bounded last-N transition ring** (the last N `tool.state` transitions, N ≈ 16) republished by ToolManager, so after a reconnect blip the shim replays the intermediate transitions — e.g. an `Engineering → EngineeringToProduction → Engineering` failure cycle — and reports every E30 CEID the host expects. This makes the design independent of a per-site "does the host need intermediate transitions?" answer: it always delivers them, so **no per-site host sign-off is required**. (`stateSeq` already lets the shim *detect* a gap; the ring lets it *recover* one.)
+**No missed E30 transitions (resolves the class-B gap, DI-8) — via a registered replay topic, not prose (X7-7).** `tool.state` stays class-B/retained for the *current-state* consumers, but the GEM shim additionally recovers the last-N transitions after a reconnect blip through **`tool.state.replay`, a registered R-R topic** ([06 §6.6](06-bus-implementation.md)) served by the ToolManager shim from a bounded last-N buffer the R-8 fan-out worker appends to (§2.4 produces exactly the `(prev, new, seq)` records it needs). So the shim replays the intermediate transitions — e.g. an `Engineering → EngineeringToProduction → Engineering` failure cycle — and reports every E30 CEID the host expects. This is a first-class topic with an ACL, counted in View 3 — the earlier "bounded last-N ring republished by ToolManager" named no topic, no server, and no storage (class-B retains only the *last* value), so it had no mechanism. **`ToolStatePayload` carries `PrevState` (M-8)** because the live E30 mapping dispatches on `(prev, curr)` edges (`AlarmsManager`, `E30Client`); the first retained delivery after subscribe is marked a snapshot (`prev = unknown`) and consumers run no edge logic on it. N ≈ 16 is validated against a P0 "max transitions per outage window" measurement (§5.2), not asserted. (`stateSeq`, ordered as `(SourceEpoch, StateSeq)` so a ToolManager restart cannot freeze it — M-9 — lets the shim *detect* a gap; the replay topic lets it *recover* one.)
 
 **Standing (a normal P0 gate, not a design gap):** the Ttl margin `ttl + margin < E30` uses per-site E30 timeouts — a **P0 measurement of the same class the design already carries** (group-commit interval, single-instance ceilings, TsmcSink service time; §5.2 Wave 0). The shim **asserts `ttl + margin < E30` at config load and fails loudly** if a site's config violates it, so a bad number is caught at startup, never in production. The machine is fully specified; the numbers are measured at P0 like every other tool.
 
@@ -373,14 +375,14 @@ classDiagram
     }
     class IGemSecsCallbacks {
         <<interface>>
-        +CompleteTransaction(tx, hcack)
-        +RaiseAlarm(ceid)
-        +ReportEvent(ceid, payload)
+        +SetControlState(state)
+        +SendCollectionEvent(evt)
+        +ReportToolState(state)
+        +ReportScanStarted(waferId, slot)
     }
     class IGemTransaction {
         <<interface>>
-        +string TransactionId
-        +TimeSpan E30Window
+        +CompleteHcack(accepted) : completes the E30 reply off the reader thread
     }
     class TtlConfig {
         +FromSiteE30(margin) TimeSpan
@@ -451,6 +453,6 @@ classDiagram
 | **Security** (R-7 — see [§6.8](06-bus-implementation.md)) | Publish ACLs key on the **OS-authenticated pipe account** (distinct service accounts per privileged publisher), never a self-asserted `sourceName`; default-deny; **signed+verified child manifest** (fail-closed); `:5007` default-deny, authenticated (**mTLS — decided**; Windows-auth fallback), minimum-interface bound + rate-limited; spool/journal/dead-letter at-rest ACLs; **append-only off-bus audit** before publish. Owner: Security (Ofek Harel) — a P1a entry criterion |
 | **Storm control** | Error telemetry coalesced per `(source, errorCode)` + token bucket in the library — a flapping sensor costs summaries, not 300k journaled messages |
 | **Endpoints** | One ToolHost-owned manifest; endpoint hash in the fleet fingerprint; DNS for Fleet |
-| **Ports** | :5007 gateway commands · :5060 ToolServices · :5100 ToolHost health · :5050 Fleet (remote) · retired: :5005; contained→retired: :50055. The bus uses **no ports** (named pipes) |
+| **Ports (with binding — SEC7-3/4/8)** | :5007 gateway commands (**MES VLAN**, mTLS, per-op authz) · :5060 ToolServices (**loopback**, svc-account ACL) · :5100 ToolHost health (**loopback/mgmt iface**, authenticated — an open :5100 leaks the manifest hash) · gateway diagnostic REST (**loopback**, own authn) · :5050 Fleet egress (**outbound**, cleartext today — residual accepted risk, M-15) · retired: :5005; contained→retired: :50055 (loopback). The bus uses **no ports** (named pipes) |
 
 Load: nominal <1 msg/s, wafer bursts ~50, storms capped at 10/s per source — every buffer is sized against this model with 4–5 orders of magnitude of single-instance headroom (no load balancing needed on-tool; fleet-side herd control via jitter + drain caps).

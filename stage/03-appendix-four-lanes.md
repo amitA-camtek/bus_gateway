@@ -108,7 +108,7 @@ public static readonly Topic ToolTelemetry =
                      tokenBucket: Rate.PerSecond(10, burst: 100)));
 ```
 
-**Lane A gate (per edge):** contract tests → fault injection → zero *unexplained* shadow divergence over N days → rollback drill executed.
+**Lane A gate (per edge):** contract tests → fault injection → zero *unexplained* shadow divergence over the **R-TS-2 event-count gate** (≥ 10 000 `scan.committed` pairs; ≥ 500 `tool.state` transitions incl. scripted storms — **not** calendar days, which have near-zero statistical power at ~10 tool.state/day) → rollback drill executed.
 
 ### Per-edge outcome — what happens to each Lane-A edge
 
@@ -138,11 +138,11 @@ public static readonly Topic ToolTelemetry =
 - **What happens:** ScenarioManager is untouched; **AOI republishes** the fan-out-worthy callbacks onto the bus. A ScenarioManager-side shim is deferred to its own program.
 - **Gate:** blocked on the A-2 host-process reconciliation before P2 planning.
 
-#### Tool state → `tool.state` (P3 — small diff, high semantics)
+#### Tool state → `tool.state` (P3 — high semantics; requires introducing transition serialization, R-8)
 
 - **Today:** `IToolManagerCB.OnToolStateChanged` fan-out from ToolManager's `CallbackHandler` (synchronous, per-subscriber, undefined stall behavior).
 - **What happens:** ToolManager dual-publishes `tool.state` (class B, **retained**) with **`stateSeq` stamped inside a transition-commit lock that must first be introduced** (it does not exist today — R-8/FEA-1); subscribers (GUI BusAdapter, GEM shim, gateway) flip after shadow; the CB fan-out retires per subscriber. Reaction blocks migrate **atomically — never split** across COM and bus.
-- **Gate/risk:** the sync→async drift risk lives here — shadow comparator + `stateSeq` pairing are the mitigations; three lines of code, the most-watched flip of the program.
+- **Gate/risk:** the sync→async drift risk lives here — shadow comparator + `(SourceEpoch, stateSeq)` pairing are the mitigations. **Not a small diff** ([04 §4.2](04-impact-analysis.md), R-8): it introduces a transition-serialization lock that does not exist today + a deadlock audit of the sync CB fan-out — the most-watched flip of the program.
 
 #### Host GUI commands → `gui.commands` (P4)
 
@@ -247,7 +247,7 @@ Code for the seam + failure policy: [02-aoi-architecture.md §2.5](02-aoi-archit
 #### CMM inbound (:50055) — contain, then split
 
 - **Today:** AOI_Main *hosts* a Grpc.Core server for CMM's inbound calls — the hub's only network listener.
-- **What happens:** Wave 2 — the gateway proxies :5007→:50055 (external surface closed; by-value wafer maps and the operator-modal confirmation keep working unchanged); later, only via a negotiated CMM contract change — notifications move to bus topics, bulk maps to pointer hand-off, and the listener + the Grpc.Core *server* dependency are deleted. `ExportMapConfirmation` stays request-less (operator-modal — permanently exempt from Ttl'd request/reply).
+- **What happens:** Wave 2 — the gateway proxies :5007→:50055 (**contains the EOL Grpc.Core runtime and gives the external CMM caller an authenticated, per-operation-authorized :5007 door**; :50055 was already loopback-bound, so this is runtime-containment + a real door, *not* "closing an external surface"); by-value wafer maps and the operator-modal confirmation keep working under the per-method cap ([07 §7.7](07-toolconnect-design.md)); later, only via a negotiated CMM contract change — notifications move to bus topics, bulk maps to pointer hand-off, and the listener + the Grpc.Core *server* dependency are deleted. `ExportMapConfirmation` stays request-less (operator-modal — permanently exempt from Ttl'd request/reply).
 
 ---
 
@@ -383,6 +383,8 @@ sequenceDiagram
 ```
 
 ### Code — the compensation table (the lane's critical section)
+
+The compensation continuation must also run on a **faulted or canceled** dispatch, not only on Ttl expiry (M-11/GS7-6): today's real catch path (`ExternalControlCbUiWrapper.GuiStartManualScan` catch → `ManualScanDone()`) fires an immediate completion on a synchronous failure, so "catch-path parity" requires the P4 continuation to compensate `Task.IsFaulted`/`IsCanceled` for any command with a completion event — otherwise a dispatch that throws before reaching `Scan` strands the customer. (The async-void post-await gap in today's `frmProduction.GuiStartManualScan` is a pre-existing bug the design closes, not preserves.)
 
 ```csharp
 // P4 rule (review CC10): a NACK/expiry has no COM channel back to the customer -

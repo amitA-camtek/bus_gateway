@@ -59,6 +59,8 @@
 
 **Recommendation: A** — ACCEPTED, and **strengthened past the cross-team dependency**: the gateway now dedups on its own `(source, sourceEpoch, seq)` (persisted high-water recovered from the WAL), so duplicates don't leave the gateway. The Fleet/TSMC `messageId` dedup is therefore **optional defense-in-depth** for the residual crash-between-sink-ack-and-WAL-mark window, **not a P1a blocker** (§6.5 gateway-WAL, §5.6.1 A-6). ~~Until that confirmation lands, R-3 stays open~~ *(superseded)*. TestKit 5 must assert per-sink `count==published AND distinct-count==published` (a plain count hides a loss+duplicate cancellation).
 
+> ⚠ **Superseded on two points by the 7th cycle** ([stage-review-cycle7.md](stage-review-cycle7.md)): (1) the dedup key is **`(source, sourceEpoch, topic, seq)`** — a per-source key mis-orders across the gateway's per-`(source,topic)` lanes and reopens R-2 (X7-2); the high-water is a **durable control record** in `append→persist→ack` order, not re-derived by scanning surviving WAL entries (X7-3). (2) The **ambiguous-outcome** (deadline-after-send) leg is routine, not a rare crash window, so **downstream idempotency is *required*, not optional** — a Fleet ingestion dedup key is a **P1a cross-team dependency** (M-3/M-37). Also added: single WAL-state actor + `InFlight` dispatch lease (X7-1), typed poison taxonomy replacing `IsConnected` (X7-4).
+
 ---
 
 ## R-4 — Decouple DELIVER_ACK from sink routing 📝 (near-B2) ⛔ P1a

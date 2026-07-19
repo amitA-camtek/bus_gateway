@@ -1,6 +1,6 @@
 # Stage Design Set — Adversarial Architecture Review Record
 
-> **Target:** `stage\` (8 design docs + 17 codeSnippets) — Falcon Tool Fabric.
+> **Target:** `stage\` (9 design docs incl. [07-toolconnect-design.md](07-toolconnect-design.md) + 17 codeSnippets) — Falcon Tool Fabric.
 > **Up-link:** folder index → [README.md](README.md). Decisions from this record → [stage-decision-briefs.md](stage-decision-briefs.md). Status in design docs → [05-roadmap-and-risks.md §5.6.1](05-roadmap-and-risks.md).
 > **Codebase verified against:** `C:\CamtekGit\BIS\Sources` (read-only).
 > **Method:** 9 parallel adversarial reviewers, one per dimension. Three dimensions (**security, data-integrity, test-strategy**) were never covered in the design's prior four review cycles.
@@ -228,3 +228,35 @@ Tracker with per-item status: [05 §5.6.1](05-roadmap-and-risks.md). Decision br
 ## Deliberately NOT applied
 
 - **Live bugs LB1..LB5** — documented, not filed to Azure DevOps (a write action; LB3+LB4 flagged for immediate filing when authorized).
+
+---
+
+## 6th cycle — consistency review (CON6) + landing pass
+
+> **Scope:** all 9 stage docs + codeSnippets cross-checks, including the never-before-reviewed doc 07 and the new class diagrams. Method included a machine lint of every Mermaid block (mermaid v11 under jsdom). **Round-1 verdict: consistency NOT-READY** — no new decision-level contradiction (R-1..R-8 coherent in prose), but text-level drift, one hard diagram parse failure, and four 5th-cycle resolutions (D-5, D-12, D-13, D-15-partial) that this record had marked "applied" but which were **absent from the normative text**. That last point is acknowledged: the "Applied in this pass (verified)" claim above was wrong for those four items — they are landed now, in this pass.
+
+All 17 findings fixed:
+
+| ID | Severity | Finding (short) | Fix landed |
+|---|---|---|---|
+| CON6-1 | CRITICAL | 07 §7.3 class diagram failed `mermaid.parse` (`:` in a relation label) | Label reworded (`shares 5007 host + authn`); lint re-run: **39/39 blocks parse clean** |
+| CON6-2 | MAJOR | WAL entry machine in 3 inconsistent versions (07 §7.3 3-state vs §7.4 4-state vs 06 §6.5) | `Poisoned` added to the §7.3 `WalEntryState` enum; 06 §6.5 lifecycle aligned to `pending\|done\|poison` with 07 §7.4 named normative |
+| CON6-3 | MAJOR | 07 §7.9 cited nonexistent/wrong tests; §6.10 never received the R-1/R-3 extensions | §6.10 gains rows **5b** (WAL-quota backpressure) + **6b** (retained republish after broker restart, R-5); assertion 5 verification clause now the per-sink `count AND distinct-count` criterion; 07 §7.9 citations corrected (12 → gateway suite; 8 → gateway suite; 5/6 → 3/5) |
+| CON6-4 | MAJOR | Two contradictory CI tier tables (06 §6.10 vs 04 §4.4) | 06 §6.10 now quotes the 04 §4.4 R-TS-3 table (marked normative); 5b/6b slotted into nightly |
+| CON6-5 | MAJOR | Doc 01 gateway arrows drew the pre-R-4 (ack-coupled) topology | View 3 and §1.3.2 arrows now route `BS → WAL/SP → ER → sinks`, matching 07 §7.2 |
+| CON6-6 | MAJOR | D-5 never landed: SYS-1 tombstone still on DELIVER_ACK | SYS-1 gains the broker→journal **E2E_ACK** arrow carrying the tombstone note (R-1 declared-set); snippet 12 header quote fixed |
+| CON6-7 | MINOR | 06 §6.5 kept divergent gateway internals (completion callback, second quota formula) | §6.5 cut to the bus-side contract; mechanics + quota sizing deferred to 07 §7.4–7.5 |
+| CON6-8 | MINOR | 01 §1.3.2 box implied `tool.state` takes the class-A WAL/ack path | Box annotated "(class-A topics; tool.state = audit copy, no class-A E2E semantics)" |
+| CON6-9 | MINOR | Exec summary design chain omitted doc 07 | Link added |
+| CON6-10 | MINOR | 01 §1.3.4 `IGemSecsCallbacks`/`IGemTransaction` had zero member overlap with snippet 13 | Diagram aligned to the snippet's members (`SetControlState`/`SendCollectionEvent`/…, `CompleteHcack`) |
+| CON6-11 | MINOR | 02 §2.1 diagram vs §2.3/§2.4 drift (`_shutdown` type, `RunWhenReady`, buffer factoring) | Diagram: `CancellationToken _shutdown`; `ToolStateOrderingBuffer` folded into `BusAdapter` (matching §2.4 code + snippets 05/07); `RunWhenReady` added to §2.3's normative code |
+| CON6-12 | MINOR | D-12 never landed: View 2 ":50055 localhost-only" annotation | Annotation applied to the AOI node |
+| CON6-13 | MINOR | D-13/D-15/D-11 leftovers + snippet 09 stale §4.2 quote | 06 §6.9 channel relabeled *nominal* + T-L4 drain-cap stated (also snippet 16); tests 11/13 got "(= P0-measured)"; snippet 12 citations §1.1→§1.2; snippet 09 quote updated to the C-2 all-writers text |
+| CON6-14 | MINOR | 07 attributed R-4 and SEC-3 findings to the S-list | Citations corrected to R-4 and SEC-3/R-7 |
+| CON6-15 | MINOR | 07 §7.3 `CommandPublisher` had no `tool.commands` method (SYS-3 uses one) | `PublishToolCommandAsync` added |
+| CON6-16 | MINOR | Stale 00-README TestKit note; snippet 14 missing `OnStart`/`OnStop`/`VerifySignature` + unmarked SEC-2 artifact; Mermaid render-degraded cosmetics | README points to §6.10's component design; snippet 14 gains the members with `TODO(R-OPS-3)`/`TODO(R-7/SEC-2)` markers; nested generic + stateDiagram `\n` escapes removed |
+| CON6-17 | MINOR | "net8" shorthand vs the R-OPS-6 .NET 10 LTS decision | 04 §4.2 / 07 §7.1 / snippet 12 now say "net8-era, ships on .NET 10 LTS per §4.4" |
+
+**Verification:** Mermaid lint re-run after the landing pass — **39/39 blocks parse clean** (was 38/39). Stale-phrase grep (`shares :5007`, `burst absorption`, `View 1/3 Flow`, `3-site`, `TestKit 12`, `sketch-bug list` misattributions) returns no hits in the stage set.
+
+**Post-landing verdict — consistency dimension: READY** (subject to the same governance standing conditions as the round-2 verdict above; no design decision was changed by this pass — every fix was text-level alignment to already-decided resolutions).

@@ -130,7 +130,14 @@ namespace Falcon.Net.CommonUtils.ComServerWrappers
                 }
                 // Release the gate on TRUE completion, not the async-void prologue (S-13/CC-12).
                 Task exec = _dispatch.Execute(command.ToString());
-                exec.ContinueWith(_ => _externalGate.Exit(command.ToString()));
+                exec.ContinueWith(t =>
+                {
+                    // M-11/GS7-6: today's catch path fires an immediate completion (e.g.
+                    // ManualScanDone) on a FAULTED dispatch — parity requires compensating a
+                    // faulted/canceled task too, not only Ttl expiry, or the customer strands.
+                    if (t.IsFaulted || t.IsCanceled) onExpiry();   // synthesized completion event
+                    _externalGate.Exit(command.ToString());
+                });
             });
 
             if (!posted)

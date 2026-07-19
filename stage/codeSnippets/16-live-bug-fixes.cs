@@ -235,7 +235,8 @@ namespace ToolGateway.BL.Sinks
         {
             // Read oldest-first (by file creation time). Use WriteAsync with back-pressure
             // instead of TryWrite — never lose messages from the spool on channel full.
-            // §6.9 load model: gateway channel 1000 (~30 min burst absorption at 60 wph).
+            // §6.9 load model: gateway channel 1000 (~30 min of NOMINAL traffic at 60 wph —
+            // outage absorption is the spool/WAL's job, drained at the T-L4 rate cap; D-13).
             // At cap: wait until a slot is free (WriteAsync blocks) — do not overflow.
         }
     }

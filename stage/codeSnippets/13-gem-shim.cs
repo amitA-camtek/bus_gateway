@@ -5,7 +5,14 @@
 //                Publishes host commands to the bus (gui/tool.commands via REQ).
 //                Subscribes to scan.announced and tool.state for host event reports.
 //                Degraded contract: bus dark → HCACK denial + ONLINE-LOCAL; never a timeout.
-//                Cimetrix driver + E30/E87 logic are UNTOUCHED. Host wire is byte-identical.
+//                Cimetrix driver + E30/E87 logic are UNTOUCHED. Host wire is byte-identical
+//                FOR EVENTS AND STATE; the async host-command ACCEPT path is HCACK=4 (see below).
+// TODO(X7-8, §1.3.4): the real Cimetrix contract IE30CommandCB.CommandCalled([in,out] eCommandResults)
+//   derives HCACK from the value written BEFORE the callback returns — there is NO deferred-reply
+//   handle, so "accepted, completed async as HCACK=0" is impossible without parking the reader.
+//   The accept path must map to eCmdPerformLater (HCACK=4) + a named completion CEID; CompleteHcack
+//   below RAISES that CEID, it does not return a late HCACK-0. This is a HOST-VISIBLE change → P4/P5
+//   re-qual budget. The "byte-identical" claim holds for events/state, NOT host commands.
 // Constraint: C# 7.3 / net48-compatible syntax.
 
 using System;
@@ -118,6 +125,8 @@ namespace ToolManagement.SecsGemObjects
                         },
                         ttl, ct).ConfigureAwait(false);
 
+                    // TODO(X7-8): CompleteHcack must RAISE the completion CEID (the HCACK=4 outcome),
+                    // not return a late HCACK-0. See the header note + §1.3.4.
                     tx.CompleteHcack(reply != null && reply.IsAccepted); // E30 completion off-thread
                 }
                 catch

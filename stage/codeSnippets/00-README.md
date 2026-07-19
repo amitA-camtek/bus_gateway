@@ -4,7 +4,7 @@
 > Every file cites the design section(s) it realizes.
 > Status: **design sketches** — enough to drive implementation, not production-ready code.
 >
-> **⚠ KNOWN SKETCH BUGS — see [../stage-review.md](../stage-review.md) §B1 (S-1..S-18).** The 5th review cycle found defects in these sketches where they contradict the (correct) prose they realize — e.g. `TryAdd` return discarded → silent class-A drop (S-1); per-frame `Task.Run` breaks per-source FIFO (S-3); `MonotonicClock` wall-clock stub (S-4); broker class-A queue never drained + class-A on the B/C lane (S-6); naive class-B `RetainedSlot` (S-7); ToolHost restart local-var bug (S-5). **Do not treat these files as the contract where they diverge from the design docs** — the docs are normative; several of these files will also be rewritten by the R-1..R-8 design decisions. Fixes are deferred to that resolution so they are not done twice.
+> **Sketch status.** The 5th-cycle sketch bugs **S-1..S-18 are fixed** in these files (verified — [../stage-review.md](../stage-review.md) "Applied in this pass"). Deliberate divergences from contested mechanisms are marked `TODO(R-x)`/`TODO(X7-x)` in-file and the design docs remain **normative** where they differ. The 7th cycle (gateway focus) further updated the contracts sketches (dedup key `(source,epoch,topic,seq)`, `durableSubscribers`, deny-default ACL, `PrevState`, the `tool.state.replay` ring, the fan-out-outside-lock pattern in snippet 09); the gateway sketch (12) still carries the ack-coupled `OnScanCommitted` under an explicit `TODO(R-4/X7-1..3)` pointing to [07 §7.4–7.5](../07-toolconnect-design.md), and the GEM sketch (13) carries the HCACK-0-style async accept under `TODO(X7-8)` pointing to [§1.3.4](../01-system-architecture.md) (the real accept path is HCACK=4 / `eCmdPerformLater`) — **build the gateway from doc 07 and the GEM accept path from §1.3.4, not from the sketches.**
 
 ## Contents
 
@@ -37,7 +37,7 @@
 Two new projects are mentioned in the design but have no dedicated snippet file — they are gRPC-host boilerplate or assertion lists, not design-critical sections:
 
 - **`Camtek.ToolServices.Host` (:5060)** — gRPC host wrapping existing ToolManager services; a thin `GenericHost` + service registration, no novel design contract to snapshot.
-- **`Camtek.Messaging.TestKit`** — assertion helpers (`BusHarness`, `TopicCaptor`, `ReplyStub`); the interface is an assertion list in the design docs, not a code contract.
+- **`Camtek.Messaging.TestKit`** — its component design (`BusHarness` / `TopicCaptor` / `ReplyStub` / `FaultScript`, with a class diagram and usage flow) is specified in [06 §6.10](../06-bus-implementation.md); no snippet duplicates it.
 
 ## Relationship to stage docs
 

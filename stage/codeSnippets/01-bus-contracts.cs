@@ -92,28 +92,34 @@ namespace Camtek.Messaging.Contracts
         public DurabilityClass DurabilityClass { get; private set; }
         public Type           PayloadType     { get; private set; }
         public Acl            Publishers      { get; private set; }
+        public string[]       DurableSubscribers { get; private set; } // R-1 E2E-ack set (CON7-8)
+        public int            PayloadBudgetBytes { get; private set; } // library-enforced (M-33)
         public StormControl   StormControl    { get; private set; }
 
         private Topic() { }
 
+        // NOTE (M-29/SEC-1): the default is Acl.Deny, NOT Acl.Any — Acl.Any was the fail-open default.
         public static Topic Define(string name, DurabilityClass cls, Type payloadType,
-            Acl publishers = Acl.Any, StormControl stormControl = null)
+            Acl publishers = Acl.Deny, string[] durableSubscribers = null,
+            int payloadBudgetBytes = 0, StormControl stormControl = null)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentNullException("name");
             return new Topic
             {
-                Name            = name,
-                DurabilityClass = cls,
-                PayloadType     = payloadType,
-                Publishers      = publishers,
-                StormControl    = stormControl ?? StormControl.None
+                Name               = name,
+                DurabilityClass    = cls,
+                PayloadType        = payloadType,
+                Publishers         = publishers,
+                DurableSubscribers = durableSubscribers ?? System.Array.Empty<string>(),
+                PayloadBudgetBytes = payloadBudgetBytes,
+                StormControl       = stormControl ?? StormControl.None
             };
         }
 
         public override string ToString() => Name;
     }
 
-    // ═══ Topic registry — 9 topics at P1a; +2 at P2–P3; machine.* reserved (review D-1/CON-2) ═══
+    // ═══ Topic registry — 9 at P1a; +2 at P2–P3; +tool.state.replay (GEM ring, X7-7); machine.* reserved ═══
     // §1.3.1 View 3: "9 registered topics" is the P1a set. The two P2/P2–P3 topics below MUST be
     // registered (class + payload + ACL) before their edge is planned, or the P2 design has no
     // contract to publish to.
@@ -127,10 +133,12 @@ namespace Camtek.Messaging.Contracts
             "scan.announced", DurabilityClass.C_BestEffort, typeof(ScanAnnouncedPayload),
             publishers: Acl.AoiMain);
 
-        /// <summary>A: never-lose, journaled + WAL + E2E ack. Carries stable final path.</summary>
+        /// <summary>A: never-lose, journaled + WAL + E2E ack. Carries stable final path.
+        /// Declared durable subscriber = ToolGateway (R-1): E2E-ack completes only when it acks;
+        /// a disconnected gateway keeps the message in the publisher journal (no silent loss).</summary>
         public static readonly Topic ScanCommitted = Topic.Define(
             "scan.committed", DurabilityClass.A_NeverLose, typeof(ScanCommittedPayload),
-            publishers: Acl.AoiMain);
+            publishers: Acl.AoiMain, durableSubscribers: new[] { "svc-Gateway" });
 
         /// <summary>C: per-recipe scan operations (phase, focus, etc.).</summary>
         public static readonly Topic ScanOperations = Topic.Define(
@@ -162,12 +170,21 @@ namespace Camtek.Messaging.Contracts
             "production.carrier", DurabilityClass.B_Retained, typeof(ProductionCarrierPayload),
             publishers: Acl.ToolManager);
 
-        /// <summary>A-ErrorsOnly with storm coalescing — reproduced exactly from §03-lanes Lane-A.</summary>
+        /// <summary>R-R: GEM transition ring — last-N tool.state transitions for gap recovery after a
+        /// reconnect blip (X7-7/R-6). Served by svc-ToolManager, requested by svc-GemShim. Class-B
+        /// retains only the LAST value; this topic is the mechanism the "last-N ring" prose needed.</summary>
+        public static readonly Topic ToolStateReplay = Topic.Define(
+            "tool.state.replay", DurabilityClass.R_RequestReply, typeof(ToolStatePayload[]),
+            publishers: Acl.ToolManager);
+
+        /// <summary>A-ErrorsOnly with storm coalescing — reproduced exactly from §03-lanes Lane-A.
+        /// Routes to Fleet ONLY, never TSMC (M-35). Payload budget 2 KB (M-33).</summary>
         public static readonly Topic ToolTelemetry = Topic.Define(
             "tool.telemetry",
             DurabilityClass.A_ErrorsOnly,
             typeof(TelemetryPayload),
             publishers: Acl.AoiMain | Acl.ToolManager,
+            payloadBudgetBytes: 2048,
             stormControl: StormControl.CoalesceByKey<TelemetryPayload>(
                 key:           t => (t.Source, t.ErrorCode),
                 firstImmediate: true,
@@ -204,7 +221,7 @@ namespace Camtek.Messaging.Contracts
         public long     SourceEpoch   { get; set; }   // publisher incarnation (review S-2/R-2): dedup
                                                        // key = (Source, SourceEpoch, Topic, Seq) so a
                                                        // journal reset can't make fresh msgs look dup
-        public long     Seq           { get; set; }   // per-(source,epoch) monotonic — ordering, dedup
+        public long     Seq           { get; set; }   // per-(source,epoch,TOPIC) monotonic — ordering, dedup (X7-2)
         public DateTime TimestampUtc  { get; set; }
         public int      SchemaVersion { get; set; } = 1; // additive-only; ignore-unknown
         public long?    TtlMs         { get; set; }
@@ -254,10 +271,17 @@ namespace Camtek.Messaging.Contracts
 
     public sealed class ToolStatePayload
     {
-        public ToolStateEnum State    { get; set; }
-        /// <summary>Stamped inside a ToolManager transition-commit lock to be introduced (R-8; §03-lanes P3).</summary>
-        public long          StateSeq { get; set; }
-        public string        Reason   { get; set; }
+        public ToolStateEnum State     { get; set; }
+        /// <summary>The prior state — the live E30 mapping dispatches on (prev,curr) EDGES
+        /// (AlarmsManager, E30Client), so the payload must carry it (M-8/GS7-3). On the first
+        /// retained delivery after subscribe this is a snapshot: PrevState = NotInitialized/unknown,
+        /// and consumers run no edge logic on it.</summary>
+        public ToolStateEnum PrevState { get; set; }
+        /// <summary>Stamped inside a ToolManager transition-commit lock to be introduced (R-8; §03-lanes P3).
+        /// Consumers order by (SourceEpoch, StateSeq) — a ToolManager restart resets StateSeq to 0 and
+        /// would otherwise freeze application for days (M-9/GS7-4).</summary>
+        public long          StateSeq  { get; set; }
+        public string        Reason    { get; set; }
     }
 
     public enum ToolStateEnum

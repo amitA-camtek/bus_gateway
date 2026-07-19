@@ -1,6 +1,6 @@
 // Realizes: §1.3.2 ToolConnect gateway additions (BusSource + CommandPublisher + spool fixes)
 //           §05 §5.5 LB1/LB2/LB5 spool bug fixes (independent of the fabric program)
-// Project: Utilities\ToolGateway\ToolGateway.BL + .Endpoint (net7 → net8 at P1a)
+// Project: Utilities\ToolGateway\ToolGateway.BL + .Endpoint (net7 → net8-era at P1a; ships on .NET 10 LTS per 04 §4.4, R-OPS-6)
 // Phase: P1a — BusSource + CommandPublisher added; :5005 kept for dual-run; spool fixes ship in Wave 0
 // Note: net8 — modern C# 12 syntax.
 
@@ -17,8 +17,10 @@ namespace ToolGateway.BL
     // ═══ BusSource (NEW) ════════════════════════════════════════════════════════════
     // §1.3.2: "BusSource — subscribes scan.committed, tool.telemetry, tool.state;
     //          WAL-append BEFORE ack; health = consumption liveness token"
-    // §1.1 View 1 Flow SYS-1: "GW->>GW: WAL spool append (durable ownership FIRST)
-    //                           GW-->>BUS: DELIVER_ACK — publisher journal appends ack-tombstone"
+    // §1.2 Flow SYS-1: "GW->>GW: WAL spool append (durable ownership FIRST)
+    //                    GW-->>BUS: DELIVER_ACK (a function of the WAL append only, R-4)"
+    // The publisher journal's ack-tombstone is appended on E2E_ACK — broker-confirmed
+    // per (message, DECLARED durable-subscriber set) (§6.4/§6.6, R-1) — NEVER on DELIVER_ACK.
     //
     // Zero silent loss guarantee: the WAL is appended before DELIVER_ACK so a gateway
     // crash between DELIVER_ACK and sink persistence is recoverable (§6.10 assertion 5).
@@ -56,13 +58,15 @@ namespace ToolGateway.BL
 
         private async Task OnScanCommitted(BusMessage<ScanCommittedPayload> msg)
         {
-            // 1. Append to WAL FIRST — durable ownership before ack
+            // TODO(R-4/X7-1..3, 07 §7.4-7.5): this sketch still AWAITS RouteAsync before returning —
+            // that couples DELIVER_ACK to routing (exactly what R-4 rejects). The normative design:
+            //   1. DedupIndex on (source,epoch,TOPIC,seq) — drop if <= durable high-water.
+            //   2. WAL append (tmp+fsync+rename) THEN persist high-water THEN return (=ACK).
+            //   3. Routing consumes from the WAL ASYNCHRONOUSLY via the WAL-state actor; sinks
+            //      report typed results (Transient/Deterministic/Ambiguous); drain uses InFlight leases.
+            // Do NOT copy this ack-coupled shape — see doc 07 §7.4-7.5.
             await _wal.AppendAsync(msg.Envelope, msg.Payload).ConfigureAwait(false);
-
-            // 2. Route to sinks (FleetSink, TsmcSink via EventRouter/SinkDispatchers)
             await _router.RouteAsync(msg.Envelope, msg.Payload).ConfigureAwait(false);
-
-            // DELIVER_ACK is sent automatically by the bus library when this Task completes.
         }
 
         private async Task OnToolTelemetry(BusMessage<TelemetryPayload> msg)
@@ -87,7 +91,7 @@ namespace ToolGateway.BL
 
     // ═══ CommandPublisher :5007 (NEW) ════════════════════════════════════════════════
     // §1.3.2: "CommandPublisher :5007 — validate + authorize + audit; publishes tool/gui.commands"
-    // §1.1 View 3 Flow SYS-3: "M->>GW: remote operation request → authenticate + authorize + audit
+    // §1.2 Flow SYS-3: "M->>GW: remote operation request → authenticate + authorize + audit
     //                           GW->>BUS: REQ tool.commands (Ttl, ACL: GEM shim + gateway only)"
     //                          "bus down: :5007 answers 'fabric unavailable' immediately"
     // §6.8: "command publishes and ACL rejections audited with correlationId"
@@ -145,8 +149,10 @@ namespace ToolGateway.BL
 
         private bool IsAuthorized(string identity, string command)
         {
-            // TODO: mTLS / Windows auth per §6.8 + §5.6 open question 7
-            return true;
+            // TODO(SEC-3/R-7, 07 §7.6): default-DENY per-identity operation allowlist. mTLS is DECIDED
+            // (§6.8.3 — no longer an open question); certs are operation-class-scoped (MES != CMM, X7-6).
+            // `return true` is the SEC-3 fail-open finding, NOT the design.
+            return false; // default-deny until the allowlist is wired
         }
 
         private void Audit(string outcome, string command, string identity, string correlationId)

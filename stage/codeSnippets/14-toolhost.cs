@@ -42,16 +42,27 @@ namespace Camtek.ToolHost
             _health     = new HealthAggregator(_supervisor, _manifest);
         }
 
+        private readonly CancellationTokenSource _run = new();
+
         public async Task RunAsync(CancellationToken ct)
         {
-            // Start children in startOrder
-            await _supervisor.StartAllAsync(ct);
+            // CC7-11: StartAllAsync must RETURN after spawning (retaining the supervisor tasks),
+            // NOT await its own infinite supervision loops — otherwise the health API never serves.
+            var supervisors = _supervisor.StartAll(ct);       // spawns + returns the loop tasks
+            await Task.WhenAll(_health.ServeAsync(ct), Task.WhenAll(supervisors));
+        }
 
-            // Start health API :5100
-            await Task.WhenAll(
-                _health.ServeAsync(ct),
-                _supervisor.WatchAsync(ct)    // crash-containment loop
-            );
+        // §1.3.3 — the Windows-service surface (SCM SERVICE_CONTROL_* entry points).
+        public void OnStart() => _ = RunAsync(_run.Token);
+
+        // R-OPS-3 + M-19/CC7-9: set the Stopping latch BEFORE the first drain signal so the
+        // quarantine-never restart loop does not fight the drain (restarting broker/gateway
+        // mid-drain then job-object-killing the fresh instance). Reverse-order drain, then cancel.
+        public void OnStop()
+        {
+            _supervisor.Stopping = true;                      // child exits now treated as final
+            _supervisor.StopAllAsync().GetAwaiter().GetResult(); // reverse startOrder + per-child timeout
+            _run.Cancel();
         }
     }
 
@@ -116,8 +127,14 @@ namespace Camtek.ToolHost
             }
         }
 
+        // M-19/CC7-9: while an ordered stop is in progress, a child exit is EXPECTED (we asked for it) —
+        // never restart it, never escalate. Otherwise the quarantine-never loop restarts broker/gateway
+        // mid-drain and the SCM teardown then job-object-kills the fresh instance.
+        public volatile bool Stopping;
+
         private async Task HandleChildExitAsync(string name, CancellationToken ct)
         {
+            if (Stopping) return;                              // supervision suspended during OnStop
             if (!_children.TryGetValue(name, out var child)) return;
             var config = child.Config;
 
@@ -276,13 +293,24 @@ namespace Camtek.ToolHost
         public static EndpointManifest Load(string path = @"C:\bis\config\toolbus.json")
         {
             // Load from toolbus.json; compute Hash for the fleet fingerprint.
-            return new EndpointManifest
+            var manifest = new EndpointManifest
             {
                 Hash     = ComputeHash(path),
                 Children = DefaultChildren()
             };
+            manifest.VerifySignature(path); // SEC-2: verified BEFORE any child launch
+            return manifest;
         }
 
+        // R-7/SEC-2 (§6.8.4): the manifest is SIGNED; ToolHost verifies before launch and
+        // FAILS CLOSED on mismatch — LocalSystem must never exec a path from a tamperable file.
+        public void VerifySignature(string path)
+        {
+            // TODO(R-7/SEC-2): Authenticode/manifest signature check; throw (fail-closed) on mismatch.
+        }
+
+        // TODO(R-7/SEC-2): real SHA-256 of the manifest content — the "TODO" literal was
+        // itself the SEC-2 finding artifact; the hash feeds the fleet fingerprint (§1.4).
         private static string ComputeHash(string path) { return "TODO"; }
 
         private static List<ChildConfig> DefaultChildren()

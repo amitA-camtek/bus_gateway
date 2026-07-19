@@ -9,7 +9,7 @@
 
 ## 2.1 Internal architecture — today vs target
 
-**Today:** communication concerns are smeared across an invisible Form (`frmProduction`: 4 COM wrappers + ~25 `Fire*` methods, each with its own Sim/VVR short-circuit), `frmScanTab` (result publishing + gateway push), per-wrapper ad-hoc UI marshaling, a hosted gRPC server (:50055), and a reentrant `DoEvents` pump primitive.
+**Today:** communication concerns are smeared across an invisible Form (`frmProduction`: 4 COM wrappers + ~23 `Fire*` methods across ~80 call sites/12 files, each with its own Sim/VVR short-circuit — see the polarity note in §2.2), `frmScanTab` (result publishing + gateway push), per-wrapper ad-hoc UI marshaling, a hosted gRPC server (:50055), and a reentrant `DoEvents` pump primitive.
 
 **Target:** three plain, testable components own all communication; `frmProduction` becomes a thin shell.
 
@@ -47,11 +47,13 @@ classDiagram
     class BusAdapter {
         -IBus _bus
         -UiMarshaller _ui
-        -ToolStateOrderingBuffer _stateBuffer
         -CommandSerializationGate _gate
         -ISimVvrGate _simVvr
+        -long _lastAppliedSeq : tool.state ordering (§2.4)
         +RegisterSubscriptions()
         +FetchAndApplyToolStateSnapshot()
+        -OnToolStateEvent(e) : ApplyIfNewer(stateSeq)
+        -OnSnapshot(state, seq) : race-safe startup (§2.4)
         +Publish~T~(topic, payload) : facade, ≤1 ms
         +DispatchExternalCommand(cmd, requestId, ttl) : P4 in-proc path
         -ServeGuiCommands(msg) Task~Reply~ : two-stage Ttl gate
@@ -59,10 +61,10 @@ classDiagram
     }
     class UiMarshaller {
         -Control _dispatcher
-        -volatile bool _shutdown
+        -CancellationToken _shutdown
         +TryPost(work) bool : BeginInvoke-only
         +TryPostAndWait(work, timeout) bool : UI-thread reentrant-safe (S-8)
-        +RunWhenReady(work) : pre-handle buffer
+        +RunWhenReady(work) : re-arms until the handle exists (S-11)
     }
     class CommandSerializationGate {
         +TryEnter(requestId) bool : one command in flight
@@ -70,11 +72,6 @@ classDiagram
     }
     class ToolStateReactions {
         +Apply(state) : plain, testable - no COM, no bus
-    }
-    class ToolStateOrderingBuffer {
-        -long _lastAppliedSeq
-        +OnToolStateEvent(e) : ApplyIfNewer(stateSeq)
-        +OnSnapshot(state, seq) : race-safe startup (§2.4)
     }
     class ToolStateEvent {
         +ToolStateEnum State
@@ -123,9 +120,8 @@ classDiagram
 
     BusAdapter --> UiMarshaller
     BusAdapter --> CommandSerializationGate
-    BusAdapter --> ToolStateOrderingBuffer
-    ToolStateOrderingBuffer --> ToolStateReactions
-    ToolStateOrderingBuffer ..> ToolStateEvent
+    BusAdapter --> ToolStateReactions : ApplyIfNewer, stateSeq order (§2.4)
+    BusAdapter ..> ToolStateEvent
     ToolStateReactions --> IGuiStateSink
     ToolStateReactions --> IJobStateSink
     frmProduction ..> ToolStateReactions
@@ -141,6 +137,8 @@ classDiagram
 ## 2.2 Component: BusAdapter
 
 **Responsibility:** *all* bus interaction for the process — subscriptions (`gui.commands`, `tool.state`, `loader.events`), the two-stage Ttl gate, the central Sim/VVR gate, request/reply serving (state getters), and the publish façade (the class-A journal itself lives inside the bus library's journal-writer thread — the caller never touches disk).
+
+> **The Sim/VVR gate is a per-command *policy table*, not one blanket suppress-when-offline rule (M-10/GS7-5).** The real `Fire*` sites carry **three** polarities, verified in `frmProduction.cs`: *suppress-in-Sim/VVR* (most, e.g. `FireWaferScanResultsAreReady`), ***fire only in VVR*** (`FireExportMapAfterReviewAtOffline:899`, `FireInOutVerifyTabAtOffline`, `FireSetLotIdAndWaferIdAtOffline` — the offline-verify automation), and ***ungated*** (`FireManualScanDone`, `FireFalconGuiLifeCycleChanged`). A single suppress-when-offline gate would kill the offline-verify flow and newly suppress `ManualScanDone` in the simulator. The central gate is therefore a table keyed by topic/command → `{ SuppressOffline | OnlyVvr | Always }`; the P2 census ([03](03-appendix-four-lanes.md) lane A) records the polarity per `Fire*` **before** the mechanical sweep.
 
 ```mermaid
 flowchart TB
@@ -253,6 +251,18 @@ public sealed class UiMarshaller
             return done.Wait((int)timeout.TotalMilliseconds, _shutdown);
         }   // caller decides what an abandoned wait means - never blocks forever
     }
+
+    // Run `work` as soon as the dispatcher handle exists; if it isn't ready yet
+    // (startup ordering) re-arm on a pooled timer without blocking — a caller like
+    // the §2.4 snapshot post can never be silently dropped (S-11).
+    public void RunWhenReady(Action work)
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        if (TryPost(work)) return;
+        Timer t = null;                                // net48-safe re-arm; rooted until it fires
+        t = new Timer(_ => { RunWhenReady(work); t.Dispose(); },
+                      null, 100, Timeout.Infinite);
+    }
 }
 ```
 
@@ -301,10 +311,12 @@ void OnSnapshot(ToolState state, long seq)      // marshalled, UI thread
     _snapshotApplied = true;
 }
 
-void ApplyIfNewer(ToolState s, long seq)
+void ApplyIfNewer(ToolState s, long epoch, long seq)   // order by (epoch, seq) — M-9/GS7-4
 {
-    if (seq <= _lastAppliedSeq) return;          // stale - drop
-    _lastAppliedSeq = seq;
+    // A ToolManager restart resets stateSeq to 0; ordering by seq alone would drop the
+    // fresh stream for days. A higher SourceEpoch is always newer.
+    if (epoch < _lastEpoch || (epoch == _lastEpoch && seq <= _lastAppliedSeq)) return;
+    _lastEpoch = epoch; _lastAppliedSeq = seq;
     _reactions.Apply(s);                         // ToolStateReactions - atomic block,
 }                                                // never split across disciplines (P3 rule)
 ```
