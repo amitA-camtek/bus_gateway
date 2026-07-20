@@ -2,9 +2,9 @@
 
 > **Purpose:** the single list of items that a design review **cannot** close — decisions that belong to a named owner, a security lead, a customer, or a P0 measurement gate. Everything here is *governance*, not unfinished design: every design fork is decided in the docs; these are the ratifications, owner assignments, and measured numbers that must land before the affected phase is **cleared to fund/build**.
 >
-> **"Design READY" ≠ "cleared to build."** The bus core is DESIGN READY across seven adversarial cycles; the gateway (doc 07) and GEM seam are specification-complete pending items **D1–D3** below.
+> **"Design READY" ≠ "cleared to build."** The bus core is DESIGN READY across nine adversarial cycles; the gateway (doc 07) and GEM seam are specification-complete pending items **D1–D3** below.
 >
-> Sources: [stage-review.md](stage-review.md) (cycles 5–6), [stage-review-cycle7.md](stage-review-cycle7.md) (cycle 7), [stage-decision-briefs.md](stage-decision-briefs.md), [05-roadmap-and-risks.md §5.6](05-roadmap-and-risks.md).
+> Sources: [stage-review.md](stage-review.md) (cycles 5–6), [stage-review-cycle7.md](stage-review-cycle7.md) (cycle 7), [stage-review-cycle8.md](stage-review-cycle8.md) (cycle 8 — D15–D21 added), [stage-review-cycle9.md](stage-review-cycle9.md) (cycle 9 — verification pass), [stage-decision-briefs.md](stage-decision-briefs.md), [05-roadmap-and-risks.md §5.6](05-roadmap-and-risks.md).
 > Legend — **Blocks:** the earliest phase that cannot proceed until this is signed. **Owner:** who decides (not who implements).
 
 ---
@@ -66,7 +66,6 @@ Design-complete, but the design's guarantees depend on these measured values cle
 ## D. Non-blocking work items (file regardless of the program)
 
 - **D13 — Live bugs LB3 + LB4:** recommended for **immediate ADO filing** independent of any fabric decision — LB3 (every alphanumeric tool registers with Fleet as ToolId 0, fleet-wide collision) and LB4 (`NonBlockingUITask` whole-second-timeout → 0 ms spurious cancel). LB1/LB2/LB5 (gateway spool) are fixed in Wave 0. Minimal fixes in [codeSnippets/16-live-bug-fixes.cs](codeSnippets/16-live-bug-fixes.cs). **Action:** file (a write action — not yet performed).
-- **D14 — Workspace `CLAUDE.md` stale census (report-only, outside the `stage\` set):** the trigger is cited as `frmJobTab.cs:941–982` / "three callers 948/981" — the verified reality is `:1342/:1375` + the larger C-2 census; "~25 Fire*" predates the C-3 80-site/12-file count. **Action:** owner sweep of the workspace `CLAUDE.md`.
 
 ---
 
@@ -121,6 +120,6 @@ Design-complete, but the design's guarantees depend on these measured values cle
 | **Wave 2** | D1 (CMM per-op authz) |
 | **P2–P3** | D10 (dds-node-status rate) |
 | **P4+ (per customer)** | D2 (HCACK-4 re-qual), D6 (dark-bus commissioning choice) |
-| **Anytime** | D3 (:5050 posture), D13 (file LB3/LB4), D14 (CLAUDE.md sweep) |
+| **Anytime** | D3 (:5050 posture), D13 (file LB3/LB4) |
 
 *No item on this list is design work. Each is a ratification, an owner assignment, a measured number, or a customer choice — the things a design review cannot and should not close on its own.*

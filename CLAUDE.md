@@ -14,8 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Folder | Role |
 |--------|------|
-| `stage\` | **Primary reference** — the current, self-contained, DESIGN READY package (8 adversarial cycles, all findings resolved). Start here. |
+| `stage\` | **Primary reference** — the current, self-contained, DESIGN READY package (9 adversarial cycles, all findings resolved). Start here. |
 | `tool-gateway-unification\` | Near-term design: unify ToolManager + ToolGateway without the bus. Independent of `stage\`; can ship first. |
+| `unitedDesgin\` | Exploratory design studies (A–D) — unreviewed alternatives on four different unification axes. Not normative. |
+| `newUnitedDesgin\` | Further exploratory alternatives (D1–D4) — unreviewed. Converges with `unitedDesgin\` findings toward the ADR recommendation. |
 | `01-proposal\` | Authoritative full-detail designs (bus, AOI_Main, ToolHost, fabric) — normative where `stage\` cross-references depth |
 | `02-reviews\` | Audit trail / review records (read-only history) |
 | `03-inputs\` | Independent source analyses used as input evidence |
@@ -30,7 +32,7 @@ The `stage\` folder is the entry point for any implementation or architectural d
 
 | # | Document | What it covers |
 |---|----------|----------------|
-| — | [stage/executive-summary.md](stage/executive-summary.md) | Leadership entry point: business case, design confidence (5 cycles), wave plan summary, recommendation |
+| — | [stage/executive-summary.md](stage/executive-summary.md) | Leadership entry point: business case, design confidence (9 cycles), wave plan summary, recommendation |
 | 0 | [stage/00-context-and-case.md](stage/00-context-and-case.md) | Today's architecture (verified baseline), the seven pain points, business case |
 | 1 | [stage/01-system-architecture.md](stage/01-system-architecture.md) | System diagrams; complete design of each system-level new component (bus broker, ToolConnect gateway, ToolHost, GEM shim) |
 | 2 | [stage/02-aoi-architecture.md](stage/02-aoi-architecture.md) | AOI_Main internals, all new AOI-level components with code snippets, and the **link-disposition table** (§2.9 — every ~21 links → lane) |
@@ -39,10 +41,11 @@ The `stage\` folder is the entry point for any implementation or architectural d
 | 5 | [stage/05-roadmap-and-risks.md](stage/05-roadmap-and-risks.md) | Wave plan, per-edge gates, governance, rollback, **five live bugs** in shipped code |
 | 6 | [stage/06-bus-implementation.md](stage/06-bus-implementation.md) | Bus build spec: API, envelope, wire protocol, journal, broker, security, load model, 14-group test kit |
 | 7 | [stage/07-toolconnect-design.md](stage/07-toolconnect-design.md) | ToolConnect gateway build spec: WAL state machine, class design, :5007 command pipeline, CMM proxy, failure matrix |
+| — | [stage/poc-implementation-plan.md](stage/poc-implementation-plan.md) | PoC plan (pre-Wave-0): proves the four load-bearing claims (latency, zero-loss, WAL back-pressure, throughput) in a throwaway sandbox at `C:\poc-falcon-bus\` before funding Wave 0 |
 
 **Code sketches** are in [stage/codeSnippets/](stage/codeSnippets/) (16 files, design-level C# — not production-ready). The `00-README.md` there lists known sketch defects (S-1..S-18); design docs are normative where they diverge from the sketches.
 
-**Review record and open decisions:** [stage/stage-review.md](stage/stage-review.md) (5th-cycle findings + round-2 "DESIGN READY" verdict), [stage/stage-decision-briefs.md](stage/stage-decision-briefs.md) (every fork decided).
+**Review record and open decisions:** [stage/stage-review.md](stage/stage-review.md) (cycles 5–6), [stage/stage-review-cycle7.md](stage/stage-review-cycle7.md) (cycle 7 — D1–D3 security/GEM forks), [stage/stage-review-cycle8.md](stage/stage-review-cycle8.md) (cycle 8 — connectivity + Fire\* census correction), [stage/stage-review-cycle9.md](stage/stage-review-cycle9.md) (cycle 9 — typed R-R API, G-8 crash-point fix; "DESIGN READY" verdict), [stage/stage-decision-briefs.md](stage/stage-decision-briefs.md) (every fork decided), [stage/OPEN-DECISIONS.md](stage/OPEN-DECISIONS.md) (D1–D3: human sign-off gates for CMM auth, GEM re-qual, `:5050` egress).
 
 ---
 
@@ -60,6 +63,26 @@ Smaller, independent scope: unify the tool's two external-facing components with
 | [04-alt1-review.md](tool-gateway-unification/04-alt1-review.md) | Adversarial review of Alt 1; resolutions that produced Rev 2; shipped-code bugs |
 | [05-alt3-complete-design.md](tool-gateway-unification/05-alt3-complete-design.md) | **Alt 3 (Rev 2)** — one supervisor with split hosting (GUI-independent egress + supervised interactive-session control), phases U0–U3 |
 | [06-alt3-review.md](tool-gateway-unification/06-alt3-review.md) | Adversarial review of Alt 3; findings + resolutions |
+
+---
+
+## Exploratory designs — `unitedDesgin\` and `newUnitedDesgin\`
+
+Both folders are **unreviewed exploratory drafts** — not normative, not the decided implementation path. They answer: *are there unification axes the three reviewed alternatives did not explore?* Any design adopted from here must go through the same adversarial review cycle as Alt 1/Alt 3 before it can be implemented.
+
+`unitedDesgin\` (Designs A–D) explores four different axes: journal-first data plane (A), semantic-model unification (B), ops-plane supervisor (C), and strangler-ToolConnect (D). `newUnitedDesgin\` (D1–D4) explores: event-spine contract (D1), CQRS projection gateway (D2), microkernel connectors (D3), COM-tap bridge (D4).
+
+The [ADR review](ADR-tool-gateway-unification-review.md) found **convergent evolution** across all 10 designs (3 independent sets independently rediscovered the same 5 primitives) and recommends a four-primitive hybrid: **Supervisor (C) → producer-side Journal with bus envelope (A) → ToolConnect fed by DirectSource (D) → COM-tap for tool-state (D4)**, with B's registry in catalogue-only form. This supersedes the "Alt 1 → Alt 3" path in implementation shape while preserving all its commitments.
+
+## Synthesis designs — top-level
+
+Three further documents represent design work after the ADR. All are **DRAFT — pending adversarial review**:
+
+| Document | What it is |
+|----------|------------|
+| [ADR-tool-gateway-unification-review.md](ADR-tool-gateway-unification-review.md) | Principal-architect cross-review of all 10 candidate designs; convergence finding; 4-primitive recommendation |
+| [sjfs-complete-design.md](sjfs-complete-design.md) | **SJFS (Supervised Journal-Fed Strangler)** — the ADR-recommended path at build-spec depth. Journal file-plane (§4) must pass its own review before P2 ships enabled. `stage/07` governs ToolConnect internals; this doc governs integration. |
+| [tooledge-complete-design.md](tooledge-complete-design.md) | **ToolEdge** — synthesis of all 11 proposals (supervisor + durability-first journal + ToolConnect strangler + COM tap + CQRS status fold + catalogue-as-code). Journal and dual-mode intake need review before E2 ships. |
 
 ---
 
